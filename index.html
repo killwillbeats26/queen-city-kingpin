@@ -1805,7 +1805,7 @@
         jitter: {},             // districtId -> { goodId -> price jitter }
         impact: {},             // districtId -> { goodId -> units you've dumped lately } — lowers what that hood pays you; recovers by tomorrow
         event: null,            // { district, good, mult } market event
-        beef: {}, beefWho: {}, retal: {}, beefRes: {}, feud: {}, visited: {}, backupDay: 0, opps: [], oppSeq: 0, war: {}, held: {}, kpHit: null, mansion: { chain:0, contract:null }, focus: null,  // hoodId -> how hot the beef is (0-100) / whose people want you; decays on its own
+        beef: {}, beefWho: {}, retal: {}, beefRes: {}, feud: {}, visited: {}, backupDay: 0, opps: [], oppSeq: 0, war: {}, held: {}, kpHit: null, mansion: { chain:0, contract:null }, mansionOwned: false, dethroned: null, table: { on:false, round:0, lvl:1, step:0, nextDay:0, duesDay:0, net:0, queue:[], allies:{}, trust:{} }, focus: null,  // hoodId -> how hot the beef is (0-100) / whose people want you; decays on its own
         away: {},               // personName -> { until (absolute game-minute), kind, hood, byYou } — locked up / hospital / gone, always comes back
         rel: {},                // personName -> -100..100 — how THAT person feels about you; every interaction moves it
         income: {},             // lifetime cash by source (deals, wholesale, jobs, traps, stores, robberies, interest) — feeds the CASH pie chart
@@ -2374,12 +2374,14 @@
        (floor 50%). Only the SELL side moves — buy prices are untouched, so dumping and buying
        back can never be an exploit. It heals on its own (see updateClock) and fully by tomorrow. */
     var IMPACT_PER_UNIT = 0.985, IMPACT_FLOOR = 0.5;
+    function impactPer(){ return (S && (S.tierIdx | 0) >= 3) ? 0.99 : IMPACT_PER_UNIT; }     // Kingpins move more weight before the block notices
+    function impactFloor(){ return (S && (S.tierIdx | 0) >= 3) ? 0.55 : IMPACT_FLOOR; }
     function impactUnits(distId, goodId){ var d = S.impact && S.impact[distId]; return (d && d[goodId]) || 0; }
-    function sellFactor(distId, goodId){ return Math.max(IMPACT_FLOOR, Math.pow(IMPACT_PER_UNIT, impactUnits(distId, goodId))); }
+    function sellFactor(distId, goodId){ return Math.max(impactFloor(), Math.pow(impactPer(), impactUnits(distId, goodId))); }
     // total multiplier for selling `count` units right now (each unit sells a hair lower than the last)
     function sellSeries(distId, goodId, count){
       var n = impactUnits(distId, goodId), sum = 0;
-      for (var i = 0; i < count; i++) sum += Math.max(IMPACT_FLOOR, Math.pow(IMPACT_PER_UNIT, n + i));
+      for (var i = 0; i < count; i++) sum += Math.max(impactFloor(), Math.pow(impactPer(), n + i));
       return sum;
     }
     function recordSale(distId, goodId, count){
@@ -2417,6 +2419,7 @@
       if (districtIsHome()) p = Math.max(1, Math.round(p * homeProf().buy));
       if (warOf(S.district)) p = Math.max(1, Math.round(p * 1.15));   // at war here: the market squeezes you
       if (raidActive(S.district)) p = Math.max(1, Math.round(p * 0.9));   // a tipped raid leaves their Spot desperate to move product
+      if ((S.tierIdx | 0) >= 3) p = Math.max(1, Math.round(p * 0.92));   // the Table's wholesale rate: Kingpins buy 8% under street
       return p;
     }
     /* a rival you tipped the law on is squeezed for 24 game-hours */
@@ -2594,7 +2597,7 @@
       { name:"Rookie",  need:0,   perk:"Small licks only. Everybody starts somewhere." },
       { name:"Hustler", need:35,  perk:"Bigger licks talk to you now, and your pockets deepen (+5)." },
       { name:"Boss",    need:75,  perk:"Boss rates: +10% on wholesale at The Spot. Pockets +5 again." },
-      { name:"Kingpin", need:120, perk:"+20% wholesale, room for a third enforcer, and jackboys hesitate." }
+      { name:"Kingpin", need:120, perk:"+30% wholesale, buy 8% under street, the block takes longer to notice your weight, a third enforcer, and jackboys hesitate. Hold the chair — the Table wants it." }
     ];
     function achCount(){ var n = 0; for (var k in S.achievements) n++; return n; }
     function tierScore(){ return Math.round(S.clout) + achCount() * 6; }
@@ -2658,6 +2661,7 @@
           log("Kingpin gate: achievements " + g.ach + "/10 · account days " + g.days + "/7 — no one-day kingpins anymore.", "");
         }
       }
+      if (S.dethroned && t > 2) t = 2;   // knocked off the chair: Kingpin stays out of reach until you take it back
       if (t > S.tierIdx){
         S.tierIdx = t;
         award(["hustler","boss","kingpin"][t - 1] || "hustler");
@@ -3722,6 +3726,8 @@
         liM.innerHTML = '<span class="box">♛</span><span><b>MANSION CONTRACT ' + (((S.mansion.chain | 0)) + 1) + ' from ' + mc.by + '</b> — ' + mc.text + ' <b>(' + mansionProg(mc) + '/' + mc.goal + ')</b> · by Day ' + mc.deadlineDay + '</span><span class="reward">' + money(mc.cash) + '</span>';
         objEl.appendChild(liM);
       }
+      var crl = crownRoadLine();
+      if (crl){ var liK = document.createElement("li"); liK.className = "now"; liK.innerHTML = '<span class="box">♛</span><span><b>' + crl.split(" — ")[0].split(" · ")[0] + '</b> — ' + crl.slice(crl.indexOf(" — ") + 3) + '</span>'; objEl.appendChild(liK); }
       if (S.dailies && S.dailies.date === todayKey()){
         S.dailies.list.forEach(function(dm){
           if (!dm.accepted) return;
@@ -4197,7 +4203,8 @@
         case "auto":
           return { label:"7th St. Auto — check the lot (stealth vs status)", run: openAuto };
         case "mansion":
-          if (!mansionUnlocked()) return { label:"KINGPIN'S MANSION — Walnut Hills · kingpins only (reach the Kingpin rank and it's yours)", run:mansionLocked };
+          if (S.mansionOwned && S.dethroned) return { label:"YOUR MANSION — SEIZED by " + S.dethroned.by + " · take back the chair", run:retakeChair };
+          if (!mansionUnlocked()) return { label:"KINGPIN'S MANSION — Walnut Hills · " + ((S.tierIdx | 0) >= 3 ? "FOR SALE — $10,000,000" : "kingpins only (reach the Kingpin rank)"), run:mansionLocked };
           return { label:"YOUR MANSION — endless contracts · war room · rest", run:mansionMenu };
         case "landmark":
           if (S.district === "mta") return hospitalAction(b);
@@ -6188,6 +6195,7 @@
         updateBeef(dt);
         updateContract(dt);
         updateMansionContract(dt);
+        updateTable(dt);
         updateKpHit(dt);
 
         // quest timer
@@ -6682,7 +6690,7 @@
         var b = best.b, hood = best.hood, info = b.sign || b.name;
         if (b.id === "traphouse") info = b.owned ? "YOUR TRAP HOUSE in " + hoodNickOf(hood) + " — T" + b.tier + ", pays " + trapRateText(hood, S.traps[hood]) : "TRAP HOUSE in " + hoodNickOf(hood) + " — for sale, " + money(trapPrice(hood));
         else if (b.id === "bizstore" || b.id === "bizbar") info = b.name + " — " + (b.owned ? "yours" : "for sale, " + money(b.price || 0));
-        else if (b.id === "mansion") info = b.name + " — " + (mansionUnlocked() ? "yours: contracts, war room, rest" : "kingpins only (reach the Kingpin rank)");
+        else if (b.id === "mansion") info = b.name + " — " + (mansionUnlocked() ? "yours: contracts, war room, rest" : ((S.tierIdx | 0) >= 3 ? "for sale — $10,000,000" : "kingpins only (reach the Kingpin rank)"));
         else if (b.id === "trap") info = "THE SPOT in " + hoodNickOf(hood) + " — market, carry upgrades, mission board; " + hoodKingpin(hood).name + " works the corner";
         else if (b.id === "landmark") info = b.name + " — " + hoodNickOf(hood) + " landmark";
         else info = b.name + " — " + hoodNickOf(hood);
@@ -7208,7 +7216,7 @@
       addHeat(18 + grade * 5);
       // he dips either way: robbed men don't stand around buying
       l.mode = "wander"; l.want = null;
-      l.dealCd = 90; l.approachCd = Math.max(l.approachCd || 0, 60);
+      l.dealCd = 90; l.approachCd = Math.max(l.approachCd || 0, 60); l.robbedAt = Date.now();
       l.offerCd = Math.max(l.offerCd || 0, 12);
       var away = openPoint(675, 2625, 540, 1170); l.tx = away.x; l.ty = away.y;
       var p = 0.66 - grade * 0.11 + gunBonus() * 0.55 + crewHelp() * 0.06;
@@ -7258,7 +7266,48 @@
       }
       updateHUD();
     }
+    /* ---- LICKS CAN TURN ON YOU ----
+       Serve a lick who just walked away from a deal (30%), or approach any lick now and then (6%, only when you're carrying real cash),
+       and he may stop buying and try YOU. It's a fight: win and you take his money, lose and you pay. Never twice within 2 minutes. ---- */
+    var _muggedAt = 0;
+    function lickMugging(l, justDealt){
+      _muggedAt = Date.now();
+      var name = l.name || "The lick", enf = crewHelp();
+      addShake(7, 0.3); l.mode = "wander"; l.want = null;
+      startBattle({ type:"jackboy", title:"IT'S A SETUP — " + name.toUpperCase(), oppName:name, oppEmoji:"🧑🏽", oppMeta:(justDealt ? "He just copped — and clocked your cash" : "He wasn't buying") + " · " + (S.gunTier ? "Strapped: " + gunName() : "No strap"), oppHp:72,
+        text:"<b>\"" + name + ": Run that. All of it.\"</b><br>" + (justDealt ? "You served him a minute ago — he watched where it went." : "The smile dropped fast.") + " Cash " + money(S.cash) + " · Product " + invCount() + ".",
+        choices:[
+          { label:S.spaceGun ? ("FIGHT — " + spaceDef().name + " ⚡" + S.spaceGun.uses) : (S.gunTier ? ("FIGHT — " + gunName().toUpperCase() + " 🔫") : "FIGHT — HANDS"), sub:"He picked the wrong one", danger:true, primary:true, run:function(){
+            var p = 0.5 + enf * 0.12 + (S.tierIdx >= 2 ? 0.05 : 0) + gunBonus() + (S.spaceGun ? spaceBonus() : 0);
+            startFight({ p:p, oppName:name, relWho:name, oppEmoji:"🧑🏽", onResolve:function(won){
+              if (won){
+                var got = randi(40, 130) + (l.kind === "bulk" ? randi(60, 200) : 0);
+                earn(got, "Took " + name + "'s stash back"); addClout(5, "flipped a setup"); addHoodClout(S.district, 3, "a lick tried it and lost");
+                if (Math.random() < 0.4) sendAway(name, "hospital", 6, "tried you and lost", S.district, true);
+                toast(name + " tried you and lost — you took " + money(got) + " off him.");
+              } else {
+                var st = jackTake(0.2); addClout(-5, "got caught slipping by a lick");
+                toast(name + " caught you slipping — took " + money(st) + " (20% of your pocket cash).", true);
+              }
+              l.dealCd = Math.max(l.dealCd || 0, 120); l.approachCd = Math.max(l.approachCd || 0, 90);
+              updateHUD();
+            }});
+          } },
+          { label:"HAND IT OVER 20%", sub:"Lose a fifth of your pocket cash, walk", run:function(){ var st = jackTake(0.2); endBattle(); l.dealCd = Math.max(l.dealCd || 0, 120); toast("You paid " + name + " to leave you alone — " + money(st) + ".", true); addClout(-3, "paid a lick off"); updateHUD(); } },
+          { label:"RUN", sub:"Break off — hold it and he loses you", run:function(){ endBattle(); l.dealCd = Math.max(l.dealCd || 0, 120); toast("You broke off — " + name + " won't try that twice today."); } }
+        ] });
+      sndAlert();
+    }
+    function lickMugRoll(l){
+      if (Date.now() - _muggedAt < 120000) return false;
+      if (S.cash < 40 && invCount() < 3) return false;   // nothing worth taking
+      if (l.robbedAt && Date.now() - l.robbedAt < 180000) return false;   // you just robbed him — different problem
+      var just = (l.dealCd || 0) > 0;
+      if (Math.random() < (just ? 0.30 : 0.06)){ lickMugging(l, just); return true; }
+      return false;
+    }
     function startLickBattle(l){
+      if (lickMugRoll(l)) return;
       if (l.dealCd > 0){ toast(l.name + " just copped — he's cooling down (" + Math.ceil(l.dealCd) + "s). The street breathes now."); sndBad(); if (l.mode === "offer") endOffer(l, 10); return; }
       if (l.name && relIn(l.name) <= -40 && Math.random() < 0.7){ toast(l.name + ": \"Nah. We're done — you know why.\"", true); sndBad(); l.dealCd = Math.max(l.dealCd || 0, 60); if (l.mode === "offer") endOffer(l, 20); return; }
       if(checkTurfTrigger()){ startTurfBattle(function(){ l.dealCd = Math.max(l.dealCd || 0, 60); l.approachCd = Math.max(l.approachCd || 0, 60); if (l.mode === "offer") endOffer(l, 60); }, l.name); return; }   /* turf never rolls straight into a sale: he cools off instead */
@@ -7832,6 +7881,7 @@
     /* once a day: pay the war bills, collect tribute, and the other kingpins make their moves */
     function dailyPolitics(){
       var h, k, nick;
+      try { tableDaily(); } catch(e){ try { console.error("[table]", e); } catch(x){} }
       var wars = []; for (h in (S.war || {})) wars.push(h);
       wars.forEach(function(wh){
         var fee = warUpkeep(); nick = hoodNickOf(wh);
@@ -7892,8 +7942,8 @@
     /* ---------------- THE MANSION (Walnut Hills) ----------------
        The Kingpin's estate: it belongs to the city's top kingpin — and when YOU reach the Kingpin rank it's yours. Owning it
        unlocks an endless contract set (bigger money, city-scale jobs) and a war room. */
-    function mansionUnlocked(){ return (S.tierIdx | 0) >= 3; }
-    function mansionSignName(){ return mansionUnlocked() ? "YOUR MANSION" : "KINGPIN'S MANSION"; }
+    function mansionUnlocked(){ return !!(S && S.mansionOwned && !S.dethroned); }   // OWNED: a Kingpin has to buy it
+    function mansionSignName(){ if (S.mansionOwned && S.dethroned) return "SEIZED — " + S.dethroned.by; return mansionUnlocked() ? "YOUR MANSION" : ((S.tierIdx | 0) >= 3 ? "FOR SALE · $10,000,000" : "KINGPIN'S MANSION"); }
     var MANSION_KINDS = ["hit", "truce", "fight", "earn", "stash", "sell", "empire", "takeover"];
     var MANSION_PAY = { hit:1.3, truce:1.2, fight:1.1, earn:1.0, stash:0.9, sell:1.0, empire:1.2, takeover:2.5 };
     function ownedProps(){
@@ -7967,16 +8017,264 @@
         generateMansionContract();
       }
     }
+    /* ================= THE TABLE — DOG EAT DOG (the endless Kingpin road) =================
+       From the Kingpin rank on, the Table never leaves you alone: dues every week, kingpins offering alliances, selling each other out, plotting on your
+       holdings. Buy the Walnut Hills mansion ($10,000,000) and you sit at the head of it — bigger stakes, faster moves, and everything is about the money.
+       Nothing here ends: the stakes grow every round and the Crown Road climbs forever. Each move is a locked choice you must make (it never goes away). */
+    var MANSION_PRICE = 10000000;
+    var CROWN_TITLES = ["Guest of the Table", "Seat Warmer", "A Voice at the Table", "Chair", "Right Hand", "Dealmaker", "Power Broker", "Shadow Chair", "Head of the Table", "Godfather"];
+    function crownTitle(l){ l = Math.max(1, l | 0); return l <= CROWN_TITLES.length ? CROWN_TITLES[l - 1] : "Godfather ×" + (l - CROWN_TITLES.length + 1); }
+    function tableState(){
+      var t = S.table;
+      if (!isPlain(t)) t = S.table = {};
+      if (!Array.isArray(t.queue)) t.queue = [];
+      if (!isPlain(t.allies)) t.allies = {};
+      if (!isPlain(t.trust)) t.trust = {};
+      t.round = t.round | 0; t.lvl = Math.max(1, t.lvl | 0); t.step = t.step | 0; t.nextDay = t.nextDay | 0; t.duesDay = t.duesDay | 0; t.net = Number(t.net) || 0; t.heat = clamp(Number(t.heat) || 0, 0, 100);
+      return t;
+    }
+    function tableUnit(){
+      var t = tableState(), base = clamp(Math.round(funds() * 0.05 / 500) * 500, 2500, 400000);
+      return Math.max(2500, Math.round(base * (1 + t.round * 0.05) * (S.mansionOwned ? 1.6 : 1) / 500) * 500);   // grows every round, forever
+    }
+    function tHeat(d){ var t = tableState(); t.heat = clamp(t.heat + d, 0, 100); if (t.heat >= 100 && !S.dethroned && !t.queue.some(function(q){ return q.type === "coup"; })) t.queue.unshift({ type:"coup" }); }
+    function tTrust(name, d){ var t = tableState(); t.trust[name] = clamp((t.trust[name] || 0) + d, -6, 6); if (relBump) { try { relBump(name, d * 4); } catch(e){} } }
+    function tableCast(){
+      var storyDone = !!(storyState().flags && storyState().flags.ending);   // Lou stays the Table's chair (and your ally) until the story ends
+      return DISTRICTS.filter(function(d){ return (d.id !== "dtw" || storyDone) && awayLeft(hoodKingpin(d.id).name) <= 0 && !(S.held && S.held[d.id]); }).map(function(d){ return { hood:d.id, name:hoodKingpin(d.id).name }; });
+    }
+    function tPick(not){ var c = tableCast().filter(function(k){ return k.name !== not; }); return c.length ? c[randi(0, c.length - 1)] : null; }
+    function tAllyList(){ var t = tableState(); return Object.keys(t.allies).filter(function(n){ return t.allies[n].until >= S.day; }); }
+    function tableRollEvent(){
+      var t = tableState(), owned = !!S.mansionOwned, allies = tAllyList();
+      var bag = ["alliance", "alliance", "plot", "plot"];
+      if (heldCount() > 0) bag.push("buyout");
+      if (owned) bag.push("triple", "triple", "plot", "alliance");
+      if (allies.length){ bag.push("cross"); if (owned) bag.push("cross", "cross"); }
+      var type = bag[randi(0, bag.length - 1)], a = tPick(), b = null;
+      if (type === "cross"){ var an = allies[randi(0, allies.length - 1)]; a = { name:an, hood:t.allies[an].hood }; }
+      if (a) b = tPick(a.name);
+      if (!a || (type === "triple" && !b)) return null;
+      return { type:type, a:a.name, ah:a.hood, b:b ? b.name : "", bh:b ? b.hood : "" };
+    }
+    /* once a day (called from dailyPolitics) */
+    function tableDaily(){
+      if ((S.tierIdx | 0) < 3 && !S.dethroned) return;
+      var t = tableState();
+      if (S.dethroned){ tHeat(-2); return; }
+      if (!t.on){ t.on = true; t.nextDay = S.day + 1; t.duesDay = S.day + 7; t.queue.push({ type:(S.mansionOwned ? "crown" : "intro") }); return; }
+      var cuts = 0;
+      Object.keys(t.allies).forEach(function(n){
+        var al = t.allies[n];
+        if (al.until < S.day){ delete t.allies[n]; log("Your alliance with " + n + " ran out.", ""); }
+        else { cuts += al.cut; al.got = (al.got || 0) + al.cut; }
+      });
+      tHeat(-2 - tAllyList().length);   // heat on your chair cools a little every day — allies cool it faster
+      if (cuts){ earn(cuts, "Alliance cuts"); t.net += cuts; toast("ALLIANCE CUTS — " + money(cuts) + " from the Table."); }
+      if (S.day >= t.duesDay){ t.duesDay = S.day + 7; t.queue.push({ type:"dues" }); }
+      if (S.day >= t.nextDay && t.queue.length < 2){
+        var ev = tableRollEvent(); if (ev) t.queue.push(ev);
+        t.nextDay = S.day + (S.mansionOwned ? randi(1, 2) : randi(2, 4));
+      }
+    }
+    var _tableT = 0;
+    function updateTable(dt){
+      if (!S || !S.username || S.over || ((S.tierIdx | 0) < 3 && !S.dethroned)) return;
+      _tableT += dt; if (_tableT < 1.5) return; _tableT = 0;
+      var t = S.table; if (!t || !t.queue || !t.queue.length) return;
+      if (driveby || battleState || dialogue || menu || rescue || oppAmb || hit || S.holedUp || S.over) return;
+      tableFire(t.queue.shift());
+    }
+    function tableDone(){
+      var t = tableState(); t.round++; t.step++;
+      if (t.step >= 3){
+        t.step = 0; t.lvl++;
+        var bonus = tableUnit() * 2; earn(bonus, "Crown Road level " + t.lvl); addClout(2, "rose on the Crown Road"); t.net += bonus;
+        toast("CROWN ROAD — LEVEL " + t.lvl + ": " + crownTitle(t.lvl).toUpperCase() + " · +" + money(bonus)); log("Crown Road level " + t.lvl + " — " + crownTitle(t.lvl) + ". The stakes just went up.", "good"); sndGood();
+      }
+      updateHUD(); renderObjectives();
+    }
+    function tableFire(ev){
+      var t = tableState(), u = tableUnit(), A = ev.a, B = ev.b, kp = A ? hoodPlug(ev.ah) : null;
+      function ask(title, opts, foot){ openChoice(title, opts, foot || "Dog eat dog — every handshake has a price. You have to answer. ↑↓ + A", true); sndAlert(); }
+      function after(msg, good){ toast(msg, !good); log(msg, good ? "good" : "bad"); tableDone(); }
+      function ledger(n){ t.net += n; }
+      if (ev.type === "intro"){
+        showDialogue([
+          "Kingpin. That's the word on every corner now. The whole Table heard it.",
+          "Here's how the Table works, kid: everybody wants to be your friend until they want what you've got. Alliances, favors, cuts — and every one of them has a knife behind it.",
+          "Dues go out every week. Somebody's always selling somebody out. It never stops, and it never gets smaller.",
+          "Walnut Hills. The Kingpin's mansion is for sale — ten million. Whoever owns it sits at the head of the Table. Until then, you're a guest. And guests pay."
+        ], function(){ log("THE TABLE: dues every week, kingpins making moves — and the Walnut Hills mansion is for sale at " + money(MANSION_PRICE) + ". Buy it to sit at the head.", "good"); tableDone(); }, "BIG LOU");
+        return;
+      }
+      if (ev.type === "crown"){
+        showDialogue([
+          "THE WORLD IS YOURS. The deed's signed and the gates are yours — white walls, red tile, a fountain with the whole globe on it.",
+          "Every kingpin at the Table just did the math on ten million dollars. Some of them want to sit at your table. Some want your chair.",
+          "From tonight it's dog eat dog. Alliances, double-crosses, triple-crosses — and every one of them comes back to the money. It does not end. It only gets bigger."
+        ], function(){ tableState().nextDay = S.day + 1; }, "THE TABLE");
+        return;
+      }
+      if (ev.type === "coup"){
+        if (S.dethroned) return;
+        var cast = tableCast().sort(function(p, q){ return (t.trust[p.name] || 0) - (t.trust[q.name] || 0); }), us = cast[0] || tPick();
+        if (!us){ t.heat = 60; return; }
+        var seized = Math.round(funds() * 0.15); if (seized > 0) payFunds(seized); ledger(-seized);
+        S.dethroned = { by:us.name, hood:us.hood, day:S.day };
+        S.tierIdx = 2; S.clout = Math.round(S.clout * 0.5); t.heat = 40; t.allies = {}; t.queue = [];
+        addOpp(us.name, us.hood, "king", hoodPlug(us.hood), "voted you off the chair"); addBeef(us.hood, 35, us.name); startRetal(us.hood, 2, us.name + "'s crew");
+        applyHoodLayout(); updateHUD(); renderObjectives(); sndBad();
+        showDialogue([
+          "THE TABLE§It was never about the dues. Too many missed moves, too many crossed hands, too many enemies counting your money.",
+          us.name.toUpperCase() + "§The vote's done, Kingpin. I'm sitting in your chair. The mansion's mine now — the gates are changed. And the Table's holding " + money(seized) + " of yours for the trouble.",
+          "BIG LOU§You're a Boss again, kid — for now. Nobody's ever taken the chair back the easy way. Rebuild your name, then go get it."
+        ], function(){ log("KNOCKED OFF THE CHAIR — " + us.name + " took Kingpin and your mansion. Rebuild your name, then take it back at the Walnut Hills gate.", "bad"); }, "THE TABLE");
+        return;
+      }
+      if (ev.type === "dues"){
+        var allies = tAllyList(), dues = Math.max(Math.round(funds() * 0.03 / 50) * 50, Math.round(u * 0.5));
+        if (allies.length) dues = Math.round(dues * 0.6);
+        if (funds() >= dues){ payFunds(dues); ledger(-dues); tHeat(-8); toast("TABLE DUES — " + money(dues) + " to keep your chair." + (allies.length ? " (your allies talked it down)" : ""), true); log("Paid the Table " + money(dues) + " in dues.", "bad"); }
+        else { var k = tPick(); tHeat(12); if (k){ addBeef(k.hood, 20, k.name); addOpp(k.name, k.hood, "king", hoodPlug(k.hood), "came to collect the Table's dues"); toast("You couldn't cover the Table's dues — " + k.name + " is coming to collect.", true); } }
+        updateHUD(); return;
+      }
+      if (ev.type === "alliance"){
+        var buy = u * 2, cut = Math.round(u * 0.5 / 50) * 50, half = Math.round(buy / 2);
+        ask("THE TABLE — " + A.toUpperCase() + " WANTS A DEAL", [
+          { label:"JOIN — pay " + money(buy), sub:"6 days: " + A + " pays you " + money(cut) + "/day and stays off your back. Allies can cross you.", disabled:funds() < buy, primary:true, run:function(){ payFunds(buy); ledger(-buy); t.allies[A] = { until:S.day + 6, cut:cut, hood:ev.ah, got:0 }; tTrust(A, 1); tHeat(-3); after("Alliance with " + A + " — " + money(cut) + "/day for 6 days. Watch your back.", true); } },
+          { label:"COUNTER — half the buy-in", sub:"50% he takes it (" + money(half) + ", smaller cut). Otherwise he's insulted.", disabled:funds() < half, run:function(){
+            if (Math.random() < 0.5){ payFunds(half); ledger(-half); t.allies[A] = { until:S.day + 6, cut:Math.round(cut * 0.7 / 50) * 50, hood:ev.ah, got:0 }; tTrust(A, 1); after(A + " took the lower buy-in — you're partners for 6 days.", true); }
+            else { tTrust(A, -1); after(A + " laughed and walked. No deal.", false); } } },
+          { label:"DECLINE", sub:"He remembers it. Might plot.", run:function(){ tTrust(A, -1); if (Math.random() < 0.3) t.queue.push({ type:"plot", a:A, ah:ev.ah }); after("You turned " + A + " down.", true); } }
+        ]); return;
+      }
+      if (ev.type === "cross"){
+        var X = Math.min(u * 2, Math.round(funds() * 0.2)); if (X > 0) payFunds(X); ledger(-X); delete t.allies[A]; tHeat(6);
+        var opts = [
+          { label:"HIT BACK — spend " + money(u), sub:"Put " + A + " in the ER and take back " + money(Math.round(X * 0.6)) + ".", disabled:funds() < u, danger:true, run:function(){ payFunds(u); ledger(-u); earn(Math.round(X * 0.6), "Took it back from " + A); ledger(Math.round(X * 0.6)); sendAway(A, "hospital", 12, "you hit back", ev.ah, true); tHeat(-6); addBeef(ev.ah, 25, A); addOpp(A, ev.ah, "king", kp, "crossed you at the Table"); tTrust(A, -3); addClout(3, "hit back at a Table cross"); after("You hit " + A + " back and took " + money(Math.round(X * 0.6)) + ".", true); } }
+        ];
+        if (B) opts.push({ label:"TAKE " + B.toUpperCase() + "'S PAYOFF", sub:B + " pays " + money(Math.round(u * 1.5)) + " to see you stay out of it — and wants you as a partner.", run:function(){ earn(Math.round(u * 1.5), B + " paid you to look away"); ledger(Math.round(u * 1.5)); tTrust(A, -3); tTrust(B, 1); t.allies[B] = { until:S.day + 3, cut:Math.round(u * 0.35 / 50) * 50, hood:ev.bh, got:0 }; addOpp(A, ev.ah, "king", kp, "got cut out and blames you"); after("You took " + B + "'s money. " + A + " won't forget it.", true); } });
+        opts.push({ label:"SWALLOW IT", sub:"Eat the loss. Respect has a way of coming back — sometimes.", run:function(){ tTrust(A, -1); if (Math.random() < 0.6){ var back = Math.round(X / 2); earn(back, A + " made it right"); ledger(back); after(A + " felt it and sent half back (" + money(back) + ").", true); } else { tHeat(4); after("You swallowed " + money(X) + ". Nobody paid it back.", false); } } });
+        ask("THE CROSS — " + A.toUpperCase() + " SOLD YOU OUT", opts, A + " cut you out and took " + money(X) + " from your money. What now?");
+        return;
+      }
+      if (ev.type === "triple"){
+        var pay = u * 2;
+        ask("TRIPLE CROSS — " + A.toUpperCase() + " vs " + B.toUpperCase(), [
+          { label:"SELL OUT " + A.toUpperCase() + " TO " + B.toUpperCase(), sub:B + " pays " + money(pay) + ". " + A + " finds out sooner or later.", run:function(){ earn(pay, B + " bought " + A + "'s secrets"); ledger(pay); tTrust(A, -3); tTrust(B, 1); addBeef(ev.ah, 18, A); after("You sold " + A + " out to " + B + " for " + money(pay) + ".", true); } },
+          { label:"SELL OUT " + B.toUpperCase() + " TO " + A.toUpperCase(), sub:A + " pays " + money(pay) + ". " + B + " finds out sooner or later.", run:function(){ earn(pay, A + " bought " + B + "'s secrets"); ledger(pay); tTrust(B, -3); tTrust(A, 1); addBeef(ev.bh, 18, B); after("You sold " + B + " out to " + A + " for " + money(pay) + ".", true); } },
+          { label:"SELL TO BOTH", sub:"55% both pay in full (" + money(Math.round(pay * 1.6)) + ")… 45% they compare notes and come for you.", danger:true, run:function(){
+            if (Math.random() < 0.55){ var big = Math.round(pay * 1.6); earn(big, "Sold to both sides"); ledger(big); tTrust(A, -1); tTrust(B, -1); addClout(2, "played both sides"); after("You played both sides and walked with " + money(big) + ".", true); }
+            else { var lose = Math.min(pay, Math.round(funds() * 0.25)); payFunds(lose); ledger(-lose); addBeef(ev.ah, 20, A); addBeef(ev.bh, 20, B); addOpp(A, ev.ah, "king", kp, "found out you sold to both sides"); addHeat(15); tHeat(10); tTrust(A, -3); tTrust(B, -3); after("Triple-crossed: " + A + " and " + B + " compared notes — you lost " + money(lose) + ".", false); } } },
+          { label:"STAY CLEAN", sub:"Pass on both. Word travels: you can't be bought.", run:function(){ tHeat(-3); addClout(2, "can't be bought"); tTrust(A, 1); tTrust(B, 1); after("You passed on both. Nobody can buy you — and they know it.", true); } }
+        ], A + " and " + B + " both want you to sell the other out. The money's on the table.");
+        return;
+      }
+      if (ev.type === "plot"){
+        var lose2 = Math.min(Math.round(u * 1.2), Math.round(funds() * 0.15));
+        ask("THE PLOT — " + A.toUpperCase() + " IS COMING", [
+          { label:"STRIKE FIRST — " + money(u), sub:"70%: his crew goes down and you loot " + money(Math.round(u * 1.6)) + ". 30%: they were ready.", disabled:funds() < u, danger:true, primary:true, run:function(){
+            payFunds(u); ledger(-u);
+            if (Math.random() < 0.7){ var loot = Math.round(u * 1.6); earn(loot, "Looted " + A + "'s crew"); ledger(loot); sendAway(A, "hospital", 10, "you struck first", ev.ah, true); tHeat(-6); tTrust(A, -2); addClout(3, "struck first at the Table"); after("You hit " + A + " first and took " + money(loot) + ".", true); }
+            else { var l2 = Math.min(u, Math.round(funds() * 0.15)); payFunds(l2); ledger(-l2); addHeat(15); tHeat(5); tTrust(A, -1); after("They were ready. You lost " + money(u + l2) + " and took heat.", false); } } },
+          { label:"BUY PEACE — " + money(Math.round(u * 1.5)), sub:"Pay " + A + " to put it down. He remembers who paid.", disabled:funds() < Math.round(u * 1.5), run:function(){ payFunds(Math.round(u * 1.5)); ledger(-Math.round(u * 1.5)); tHeat(-4); tTrust(A, 1); after("You bought " + A + " off for " + money(Math.round(u * 1.5)) + ".", true); } },
+          { label:"IGNORE IT", sub:"They hit your holdings: about " + money(lose2) + " and heat.", run:function(){ if (lose2 > 0){ payFunds(lose2); ledger(-lose2); } addHeat(15); tHeat(10); addBeef(ev.ah, 18, A); addOpp(A, ev.ah, "king", kp, "raided your holdings"); startRetal(ev.ah, 1, A + "'s crew"); after(A + "'s crew raided you for " + money(lose2) + ".", false); } }
+        ], "Your people say " + A + " is planning to move on you.");
+        return;
+      }
+      if (ev.type === "buyout"){
+        var hs = []; for (var hk in (S.held || {})) if (S.held[hk]) hs.push(hk);
+        if (!hs.length) return;
+        var h = hs[randi(0, hs.length - 1)], price = u * 6, hn = hoodNickOf(h);
+        ask("THE BUYOUT — " + A.toUpperCase() + " WANTS " + hn.toUpperCase(), [
+          { label:"SELL — " + money(price), sub:"You lose " + hn + " and its tribute. Clean money.", run:function(){ S.held[h] = false; earn(price, "Sold " + hn + " to " + A); ledger(price); tTrust(A, 1); after("You sold " + hn + " to " + A + " for " + money(price) + ".", true); } },
+          { label:"REFUSE", sub:"He's insulted.", run:function(){ tTrust(A, -1); after("You refused " + A + "'s offer for " + hn + ".", true); } },
+          { label:"TAKE THE MONEY, KEEP THE HOOD", sub:"A double cross: " + money(price) + " now — 50% he never finds out.", danger:true, run:function(){
+            earn(price, A + " paid for a hood you kept"); ledger(price);
+            if (Math.random() < 0.5){ addBeef(ev.ah, 25, A); addOpp(A, ev.ah, "king", kp, "paid you for " + hn + " and got nothing"); startRetal(ev.ah, 2, A + "'s crew"); tHeat(8); tTrust(A, -3); after(A + " figured it out. You kept " + money(price) + " — and he's sending shooters.", false); }
+            else { addClout(3, "sold a hood twice"); after("You sold " + hn + " and kept it. " + A + " has no idea. Yet.", true); } } }
+        ], A + " offers " + money(price) + " for a hood you hold.");
+        return;
+      }
+    }
+    /* the mansion itself: for sale to a Kingpin */
     function mansionLocked(){
-      openChoice("KINGPIN'S MANSION — WALNUT HILLS", [
-        { label:"KNOCK", sub:"A man in a suit looks you over: \"This house belongs to the city's top kingpin. Come back when you are one.\" (Reach the Kingpin rank: " + TIERS[3].need + " score — yours is " + tierScore() + ".)", run:null },
-        { label:"BACK", sub:"Walk away", run:null }
-      ], "Kingpins only. Reach the rank and it's yours.");
+      if ((S.tierIdx | 0) < 3){
+        openChoice("KINGPIN'S MANSION — WALNUT HILLS", [
+          { label:"KNOCK", sub:"A man in a suit looks you over: \"This house belongs to the city's top kingpin. Come back when you are one.\" (Reach the Kingpin rank: " + TIERS[3].need + " score — yours is " + tierScore() + ".)", run:null },
+          { label:"BACK", sub:"Walk away", run:null }
+        ], "Kingpins only. Reach the rank, then bring " + money(MANSION_PRICE) + ".");
+        return;
+      }
+      var have = funds(), pct = Math.min(100, Math.floor(have / MANSION_PRICE * 100));
+      openChoice("KINGPIN'S MANSION — FOR SALE", [
+        { label:"BUY THE MANSION — " + money(MANSION_PRICE), sub:have >= MANSION_PRICE ? "Paid from your Stash first, then your pockets. Sit at the head of the Table." : "You have " + money(have) + " (" + pct + "%). Keep stacking.", disabled:have < MANSION_PRICE, primary:true, run:function(){
+          openChoice("SIGN THE DEED?", [
+            { label:"SIGN — " + money(MANSION_PRICE), sub:"It's done the second you sign. The Table will notice.", danger:true, run:buyMansion },
+            { label:"NOT YET", sub:"", run:null }
+          ], "Ten million dollars. No refunds.");
+        } },
+        { label:"WALK THE GROUNDS", sub:"Gold gates, red tile, a fountain with the globe on it: THE WORLD IS YOURS.", run:null },
+        { label:"BACK", sub:"", run:null }
+      ], "Walnut Hills' finest. Kingpins only.");
+    }
+    function buyMansion(){
+      if (funds() < MANSION_PRICE){ toast("Short — the mansion is " + money(MANSION_PRICE) + ".", true); sndBad(); return; }
+      payFunds(MANSION_PRICE); S.mansionOwned = true;
+      if (!S.mansion) S.mansion = { chain:0, contract:null };
+      S.mansion.seen = true;
+      log("You bought the Walnut Hills mansion for " + money(MANSION_PRICE) + ". THE WORLD IS YOURS.", "good"); sndGood(); toast("THE WORLD IS YOURS — the Walnut Hills mansion is yours.");
+      tableState().queue.unshift({ type:"crown" });
+      applyHoodLayout(); updateHUD(); renderObjectives(); saveGame();
+    }
+    /* knocked off the chair: rebuild your name, then take it back — by force or with a very large check */
+    var CHAIR_CLOUT = 85;   // the coup halves your clout; clout comes slow, so taking the chair back is real work
+    function chairReady(){ return S.clout >= CHAIR_CLOUT && tierForScore(tierScore()) >= 3 && kingpinGate().met; }
+    function retakeChair(){
+      var d = S.dethroned; if (!d) return;
+      var ok = chairReady(), fee = Math.max(250000, tableUnit() * 10);
+      openChoice("THE CHAIR — " + d.by.toUpperCase() + " HOLDS IT", [
+        { label:"CHALLENGE " + d.by.toUpperCase() + " — FIGHT", sub:ok ? "Win and the chair, the mansion and your rank come back. Lose and it costs you." : "LOCKED — rebuild your name first: clout " + Math.round(S.clout) + "/" + CHAIR_CLOUT + ".", disabled:!ok, danger:true, primary:true, run:function(){
+          var p = 0.42 + gunBonus() * 0.8 + crewHelp() * 0.12 + (S.spaceGun ? spaceBonus() : 0);
+          startFight({ p:p, oppName:d.by + "'s crew", relWho:d.by, oppEmoji:"👑", onResolve:function(won){
+            if (won) reclaimChair("took the chair back by force");
+            else { var lost = Math.min(Math.round(funds() * 0.1), fee); if (lost > 0) payFunds(lost); addHeat(15); toast(d.by + "'s crew put you down — " + money(lost) + " gone. The chair stays his.", true); updateHUD(); }
+          } });
+        } },
+        { label:"BUY IT BACK — " + money(fee), sub:ok ? "A very large check to the man sitting in your chair. No fight." : "LOCKED — rebuild your name first (clout " + Math.round(S.clout) + "/" + CHAIR_CLOUT + ").", disabled:!ok || funds() < fee, run:function(){ payFunds(fee); reclaimChair("bought the chair back"); } },
+        { label:"BACK", sub:"", run:null }
+      ], "Kingpin is earned twice. Rebuild your name, then take it back.");
+    }
+    function reclaimChair(how){
+      var d = S.dethroned; if (!d) return;
+      S.dethroned = null; var t = tableState(); t.heat = 30; t.queue.length = 0; t.nextDay = S.day + 2;
+      checkTier(); if (S.tierIdx < 3) S.tierIdx = 3;
+      addClout(5, "retook the chair"); applyHoodLayout(); updateHUD(); renderObjectives(); sndGood(); saveGame();
+      toast("THE CHAIR IS YOURS AGAIN — Kingpin, and the mansion, back where they belong."); log("You " + how + " from " + d.by + ". Kingpin again.", "good");
+      showDialogue(["THE TABLE§" + d.by + " is out. The chair's yours again — and everybody at the Table just got the message.", "BIG LOU§Twice a Kingpin. Now they know you can lose it — and get it back. Keep your guard up."], null, "THE TABLE");
+    }
+    function tableInfoLines(){
+      var t = tableState(), al = tAllyList(), lines = [];
+      lines.push("Crown Road level " + t.lvl + " — " + crownTitle(t.lvl) + " · " + (t.step) + "/3 moves to rise · net at the Table " + (t.net >= 0 ? "+" : "−") + money(Math.abs(Math.round(t.net))));
+      lines.push("Chair heat " + Math.round(t.heat) + "/100" + (t.heat >= 70 ? " — the Table is about to vote you out" : "") + ".");
+      lines.push(al.length ? "Allies: " + al.map(function(n){ return n + " (to day " + t.allies[n].until + ", " + money(t.allies[n].cut) + "/day)"; }).join(" · ") : "No allies right now.");
+      var hot = Object.keys(t.trust).filter(function(n){ return t.trust[n] <= -2; }); if (hot.length) lines.push("Out for you: " + hot.join(", "));
+      lines.push("Next dues: day " + t.duesDay + ".");
+      return lines;
+    }
+    function crownRoadLine(){
+      if (S.dethroned) return "CROWN ROAD — KNOCKED OFF THE CHAIR by " + S.dethroned.by + ". Rebuild your clout (" + Math.round(S.clout) + "/" + CHAIR_CLOUT + "), then take it back at the Walnut Hills gate.";
+      if ((S.tierIdx | 0) < 3) return "";
+      var t = tableState();
+      if (!S.mansionOwned) return "CROWN ROAD — save " + money(MANSION_PRICE) + " for the Walnut Hills mansion (you have " + money(funds()) + "). The Table is watching.";
+      return "CROWN ROAD · LEVEL " + t.lvl + " — " + crownTitle(t.lvl) + ": settle " + (3 - t.step) + " more Table move" + (3 - t.step === 1 ? "" : "s") + " to rise. It never ends.";
     }
     function mansionMenu(){
       var c = S.mansion && S.mansion.contract, opts = [];
       if (c) opts.push({ label:"CONTRACT " + (((S.mansion.chain | 0) + 1)) + " — " + money(c.cash), sub:c.text + " (" + mansionProg(c) + "/" + c.goal + ") · by Day " + c.deadlineDay + " · from " + c.by, disabled:true, run:null });
       if (c) opts.push({ label:"SKIP THIS CONTRACT", sub:"No pay, no penalty — the underboss writes another.", run:function(){ skipMansionContract(); } });
+      opts.push({ label:"THE TABLE — CROWN ROAD LEVEL " + tableState().lvl + " · " + crownTitle(tableState().lvl).toUpperCase(), sub:tableInfoLines().join("  ·  "), disabled:true, run:null });
       opts.push({ label:"WAR ROOM — " + Object.keys(S.war || {}).length + " war(s) · " + heldCount() + "/12 held", sub:"Fronts, scores, tribute, and the list of kingpins you can take on.", run:warRoom });
       opts.push({ label:"REST — SLEEP 8 HOURS", sub:"Eight hours in the master suite: heat −40. Nobody gets past the gate.", run:function(){ S.minutes += 480; S.heat = Math.max(0, S.heat - 40); toast("You slept like a kingpin. Heat cooled."); updateHUD(); } });
       opts.push({ label:"BACK", sub:"Leave the estate", run:null });
@@ -9452,7 +9750,7 @@
       var count = Math.min(n, owned);
       var price = curPrice(g);
       // wholesale pays street price — Bosses and Kingpins command better rates, home turf sweetens it
-      var rateMult = (S.tierIdx >= 3 ? 1.2 : (S.tierIdx >= 2 ? 1.1 : 1)) * (districtIsHome() ? homeDealMult() : 1);
+      var rateMult = (S.tierIdx >= 3 ? 1.3 : (S.tierIdx >= 2 ? 1.1 : 1)) * (districtIsHome() ? homeDealMult() : 1);
       var total = Math.round(price * sellSeries(S.district, id, count) * rateMult);
       recordSale(S.district, id, count);
       if (S.doubleT > 0) total = Math.round(total * 2);
@@ -9949,17 +10247,18 @@
       var takenLooks = cast.map(function(c){ return lookKey(c); });
       var takenShirts = cast.map(function(c){ return c.shirt; });
       blockReg = { names: taken, looks: takenLooks, shirts: takenShirts };
-      var people = castLicks.filter(function(c){ return !(awayLeft(c.name) > 0); }).slice(0, 4);   // anyone locked up / hospitalized sits this visit out
+      var LICK_COUNT = 7;   // a busier block: more green $ buyers walking around
+      var people = castLicks.filter(function(c){ return !(awayLeft(c.name) > 0); }).slice(0, LICK_COUNT);   // anyone locked up / hospitalized sits this visit out
       var extraN = 0;
-      while (people.length < 4){
+      while (people.length < LICK_COUNT){
         var gen = uniqueIdentity(S.district + "-street-" + extraN, taken, takenLooks, takenShirts);
         extraN++;
         if (awayLeft(gen.name) > 0) continue;
         gen.title = "Street face — works the " + curDistrict().nick + " blocks";
         people.push(gen);
       }
-      for (var i = 0; i < 4; i++){
-        var onStreet = (i === 3);
+      for (var i = 0; i < LICK_COUNT; i++){
+        var onStreet = (i === 3 || i === 6);
         var sp = onStreet ? openPoint(420, 2625, 300, 510) : openPoint(675, 2550, 570, 1140);
         var tg = onStreet ? openPoint(450, 2625, 300, 540) : openPoint(675, 2625, 540, 1170);
         var person = people[i];
@@ -9975,7 +10274,7 @@
       }
       // the business mix on this block: piece-buyers, a holder with a
       // pack FOR you, and — once your name rings (clout 35+) — a bulk buyer
-      var kindDeck = ["buy", "offer", "buy", (S.clout >= 35 ? "bulk" : "offer")];
+      var kindDeck = ["buy", "offer", "buy", (S.clout >= 35 ? "bulk" : "offer"), "buy", "buy", "offer"];
       kindDeck.sort(function(){ return Math.random() - 0.5; });
       licks.forEach(function(l, i){ l.kind = kindDeck[i % kindDeck.length]; assignLickBiz(l, false); });
       S.hoodSeen[S.district] = true;
@@ -11326,7 +11625,122 @@
     }
 
     /* the static art of one building (day/night by `dark`); biz = {kind, owned, you, name, def} for stores & bars */
+    /* THE ESTATE — a white Mediterranean villa in the Scarface mold: perimeter wall and a gold gate, a curved drive round a fountain with the globe on it (THE WORLD IS YOURS),
+       red-tile roofs with arched windows, a domed tower over the entrance, palms, and a courtyard pool. Painted once into the building cache. */
+    function paintPalm(px, py, sc){
+      ctx.fillStyle = "rgba(23,25,35,.25)"; ctx.beginPath(); ctx.ellipse(px + 5 * sc, py + 7 * sc, 15 * sc, 8 * sc, 0, 0, Math.PI * 2); ctx.fill();
+      for (var i = 0; i < 9; i++){
+        var a = i / 9 * Math.PI * 2;
+        ctx.save(); ctx.translate(px, py); ctx.rotate(a);
+        ctx.fillStyle = i % 2 ? "#2f8a3e" : "#3fa24a";
+        ctx.beginPath(); ctx.ellipse(11 * sc, 0, 13 * sc, 3.6 * sc, 0, 0, Math.PI * 2); ctx.fill();
+        ctx.strokeStyle = "#1f5f2a"; ctx.lineWidth = 1; ctx.stroke();
+        ctx.restore();
+      }
+      ctx.fillStyle = "#7a5230"; ctx.beginPath(); ctx.arc(px, py, 4 * sc, 0, Math.PI * 2); ctx.fill(); ctx.strokeStyle = "#3a2410"; ctx.lineWidth = 1.5; ctx.stroke();
+    }
+    function paintMansionEstate(b, dark){
+      var x = b.x, y = b.y, w = b.w, h = b.h, cx = x + 218, lit = dark > 0.15, owned = mansionUnlocked(), i, g;
+      var STUCCO = "#f5eddb", STUCCO_SH = "#d9ccb0", TILE = "#c4472a", TILE_HI = "#e0684a", TILE_DK = "#8f2f1b", GOLD = "#e8b923", LINE = "#2a1d18";
+      // lawn + hedge ring
+      g = ctx.createLinearGradient(x, y, x, y + h); g.addColorStop(0, "#58a552"); g.addColorStop(1, "#3d7f3f");
+      ctx.fillStyle = g; rr(x - 8, y - 8, w + 16, h + 16, 18); ctx.fill();
+      ctx.strokeStyle = "#2c6a31"; ctx.lineWidth = 9; rr(x - 4, y - 4, w + 8, h + 8, 16); ctx.stroke();
+      ctx.strokeStyle = "rgba(255,255,255,.12)"; ctx.lineWidth = 2; rr(x - 7, y - 7, w + 14, h + 14, 16); ctx.stroke();
+      // lawn stripes
+      ctx.fillStyle = "rgba(255,255,255,.05)"; for (i = 0; i < 9; i++) ctx.fillRect(x + 6, y + 120 + i * 16, w - 12, 8);
+      // front wall with the gate gap
+      ctx.fillStyle = STUCCO; ctx.fillRect(x - 6, y - 2, cx - 34 - (x - 6), 11); ctx.fillRect(cx + 34, y - 2, x + w + 6 - (cx + 34), 11);
+      ctx.strokeStyle = LINE; ctx.lineWidth = 2; ctx.strokeRect(x - 6, y - 2, cx - 34 - (x - 6), 11); ctx.strokeRect(cx + 34, y - 2, x + w + 6 - (cx + 34), 11);
+      for (i = 0; i < 12; i++){ var fx = x + 10 + i * ((cx - 40 - x) / 11); ctx.fillStyle = GOLD; ctx.fillRect(fx, y + 1, 2.2, 6); var fx2 = cx + 40 + i * ((x + w - cx - 46) / 11); ctx.fillRect(fx2, y + 1, 2.2, 6); }
+      // gate: stone pillars with gold orbs, iron doors, arch
+      [cx - 36, cx + 22].forEach(function(px){
+        ctx.fillStyle = STUCCO; ctx.fillRect(px, y - 14, 14, 30); ctx.strokeRect(px, y - 14, 14, 30);
+        ctx.fillStyle = STUCCO_SH; ctx.fillRect(px + 9, y - 14, 5, 30);
+        ctx.fillStyle = GOLD; ctx.beginPath(); ctx.arc(px + 7, y - 19, 6, 0, Math.PI * 2); ctx.fill(); ctx.strokeStyle = LINE; ctx.lineWidth = 1.6; ctx.stroke();
+      });
+      ctx.strokeStyle = GOLD; ctx.lineWidth = 2.4; ctx.beginPath(); ctx.moveTo(cx - 22, y + 14); ctx.lineTo(cx - 22, y - 4); ctx.arc(cx, y - 4, 22, Math.PI, 0); ctx.lineTo(cx + 22, y + 14); ctx.stroke();
+      ctx.lineWidth = 1.6; for (i = -3; i <= 3; i++){ ctx.beginPath(); ctx.moveTo(cx + i * 6, y - 22 + Math.abs(i) * 1.5); ctx.lineTo(cx + i * 6, y + 14); ctx.stroke(); }
+      ctx.fillStyle = GOLD; ctx.beginPath(); ctx.arc(cx, y - 16, 4, 0, Math.PI * 2); ctx.fill();
+      // drive: from the gate into a circle round the fountain
+      var fy = y + 92;
+      ctx.fillStyle = "#cdb890"; ctx.fillRect(cx - 24, y + 12, 48, fy - y - 40);
+      ctx.beginPath(); ctx.arc(cx, fy, 52, 0, Math.PI * 2); ctx.fill();
+      ctx.strokeStyle = "#a99068"; ctx.lineWidth = 3; ctx.beginPath(); ctx.arc(cx, fy, 52, 0, Math.PI * 2); ctx.stroke();
+      ctx.fillStyle = "#4f9a4a"; ctx.beginPath(); ctx.arc(cx, fy, 34, 0, Math.PI * 2); ctx.fill(); ctx.strokeStyle = "#a99068"; ctx.stroke();
+      // fountain: stone basin, water, the globe on a gold ribbon, spouts
+      ctx.fillStyle = STUCCO; ctx.beginPath(); ctx.arc(cx, fy, 25, 0, Math.PI * 2); ctx.fill(); ctx.strokeStyle = LINE; ctx.lineWidth = 2; ctx.stroke();
+      g = ctx.createRadialGradient(cx - 4, fy - 4, 2, cx, fy, 20); g.addColorStop(0, "#9fe6f2"); g.addColorStop(1, "#2aa3c4");
+      ctx.fillStyle = g; ctx.beginPath(); ctx.arc(cx, fy, 20, 0, Math.PI * 2); ctx.fill();
+      ctx.strokeStyle = "rgba(255,255,255,.75)"; ctx.lineWidth = 1.4; for (i = 0; i < 8; i++){ var sa = i / 8 * Math.PI * 2; ctx.beginPath(); ctx.arc(cx + Math.cos(sa) * 14, fy + Math.sin(sa) * 14, 2.2, 0, Math.PI * 2); ctx.stroke(); }
+      g = ctx.createRadialGradient(cx - 3, fy - 4, 1, cx, fy, 10); g.addColorStop(0, "#7cc2ff"); g.addColorStop(1, "#1e56b8");
+      ctx.fillStyle = g; ctx.beginPath(); ctx.arc(cx, fy - 2, 9.5, 0, Math.PI * 2); ctx.fill(); ctx.strokeStyle = LINE; ctx.lineWidth = 1.6; ctx.stroke();
+      ctx.fillStyle = "#4cae5a"; ctx.beginPath(); ctx.ellipse(cx - 3, fy - 4, 4, 3, 0.5, 0, Math.PI * 2); ctx.fill(); ctx.beginPath(); ctx.ellipse(cx + 4, fy, 3, 2.2, -0.4, 0, Math.PI * 2); ctx.fill();
+      ctx.strokeStyle = GOLD; ctx.lineWidth = 2; ctx.beginPath(); ctx.ellipse(cx, fy - 2, 13, 4, -0.3, 0, Math.PI * 2); ctx.stroke();
+      // palms along the drive and at the corners
+      [[x + 26, y + 38], [x + w - 26, y + 38], [cx - 78, y + 56], [cx + 78, y + 56], [x + 24, y + 128], [x + w - 24, y + 128], [cx - 66, y + 136], [cx + 66, y + 136]].forEach(function(p){ paintPalm(p[0], p[1], 1); });
+      // villa roof masses: left wing, right wing, entrance block, rear block — each a stucco rim, red tile, ridge line and a cream facade with arched windows
+      var masses = [ [x + 16, y + 150, 124, 70], [x + w - 140, y + 150, 124, 70], [cx - 72, y + 146, 144, 54], [x + 16, y + 226, w - 32, 28] ];
+      function wallSide(mx, my, mw, mh){
+        ctx.fillStyle = STUCCO; ctx.fillRect(mx, my + mh, mw, 13); ctx.strokeStyle = LINE; ctx.lineWidth = 2; ctx.strokeRect(mx, my + mh, mw, 13);
+        ctx.fillStyle = STUCCO_SH; ctx.fillRect(mx + mw * 0.72, my + mh, mw * 0.28, 13);
+        for (var wi = mx + 11; wi < mx + mw - 8; wi += 20){
+          ctx.fillStyle = lit ? "#ffd86a" : "#2c4a73"; ctx.beginPath(); ctx.moveTo(wi, my + mh + 12); ctx.lineTo(wi, my + mh + 6); ctx.arc(wi + 4, my + mh + 6, 4, Math.PI, 0); ctx.lineTo(wi + 8, my + mh + 12); ctx.closePath(); ctx.fill();
+          ctx.strokeStyle = STUCCO; ctx.lineWidth = 1.2; ctx.stroke();
+        }
+      }
+      masses.forEach(function(m, mi){
+        var mx = m[0], my = m[1], mw = m[2], mh = m[3];
+        ctx.fillStyle = "rgba(23,25,35,.22)"; ctx.fillRect(mx + 8, my + 10, mw, mh + 13);
+        wallSide(mx, my, mw, mh);
+        ctx.fillStyle = STUCCO; rr(mx - 3, my - 3, mw + 6, mh + 6, 6); ctx.fill();
+        var tg = ctx.createLinearGradient(mx, my, mx + mw, my + mh); tg.addColorStop(0, TILE_HI); tg.addColorStop(1, TILE);
+        ctx.fillStyle = tg; rr(mx + 2, my + 2, mw - 4, mh - 4, 4); ctx.fill();
+        ctx.strokeStyle = TILE_DK; ctx.lineWidth = 1; for (var ty = my + 8; ty < my + mh - 2; ty += 6){ ctx.beginPath(); ctx.moveTo(mx + 3, ty); ctx.lineTo(mx + mw - 3, ty); ctx.stroke(); }
+        ctx.strokeStyle = "rgba(255,255,255,.22)"; ctx.lineWidth = 2; ctx.beginPath(); ctx.moveTo(mx + 6, my + mh / 2); ctx.lineTo(mx + mw - 6, my + mh / 2); ctx.stroke();
+        ctx.strokeStyle = LINE; ctx.lineWidth = 2.2; rr(mx - 3, my - 3, mw + 6, mh + 6, 6); ctx.stroke();
+        if (mi === 0 || mi === 1){   // a chimney and a skylight on each wing
+          ctx.fillStyle = STUCCO; ctx.fillRect(mx + 14, my + 10, 12, 12); ctx.strokeStyle = LINE; ctx.lineWidth = 1.6; ctx.strokeRect(mx + 14, my + 10, 12, 12); ctx.fillStyle = "#3a2a22"; ctx.fillRect(mx + 17, my + 13, 6, 6);
+          ctx.fillStyle = "rgba(150,205,235,.8)"; ctx.fillRect(mx + mw - 38, my + 12, 24, 16); ctx.strokeRect(mx + mw - 38, my + 12, 24, 16);
+        }
+      });
+      // entrance block: columned portico and the domed tower
+      ctx.fillStyle = STUCCO; ctx.fillRect(cx - 28, y + 128, 56, 22); ctx.strokeStyle = LINE; ctx.lineWidth = 2; ctx.strokeRect(cx - 28, y + 128, 56, 22);
+      ctx.fillStyle = TILE; ctx.fillRect(cx - 30, y + 126, 60, 6); ctx.strokeRect(cx - 30, y + 126, 60, 6);
+      for (i = 0; i < 4; i++){ ctx.fillStyle = "#fffaf0"; ctx.fillRect(cx - 24 + i * 16, y + 133, 5, 17); ctx.strokeRect(cx - 24 + i * 16, y + 133, 5, 17); }
+      ctx.fillStyle = "#6a3b1e"; rr(cx - 7, y + 138, 14, 12, 3); ctx.fill(); ctx.strokeStyle = GOLD; ctx.lineWidth = 1.6; ctx.stroke();
+      var tcy = y + 175;
+      ctx.fillStyle = "rgba(23,25,35,.25)"; ctx.beginPath(); ctx.arc(cx + 5, tcy + 6, 30, 0, Math.PI * 2); ctx.fill();
+      ctx.fillStyle = STUCCO; ctx.beginPath(); ctx.arc(cx, tcy, 29, 0, Math.PI * 2); ctx.fill(); ctx.strokeStyle = LINE; ctx.lineWidth = 2.4; ctx.stroke();
+      g = ctx.createRadialGradient(cx - 8, tcy - 8, 3, cx, tcy, 25); g.addColorStop(0, TILE_HI); g.addColorStop(1, TILE_DK);
+      ctx.fillStyle = g; ctx.beginPath(); ctx.arc(cx, tcy, 24, 0, Math.PI * 2); ctx.fill(); ctx.stroke();
+      ctx.strokeStyle = "rgba(0,0,0,.25)"; ctx.lineWidth = 1; for (i = 0; i < 8; i++){ var da = i / 8 * Math.PI * 2; ctx.beginPath(); ctx.moveTo(cx, tcy); ctx.lineTo(cx + Math.cos(da) * 24, tcy + Math.sin(da) * 24); ctx.stroke(); }
+      ctx.fillStyle = GOLD; ctx.beginPath(); ctx.arc(cx, tcy, 5, 0, Math.PI * 2); ctx.fill(); ctx.strokeStyle = LINE; ctx.lineWidth = 1.5; ctx.stroke();
+      // courtyard pool between the wings and the rear block
+      var py0 = y + 206, pg = ctx.createLinearGradient(cx - 52, py0, cx + 52, py0 + 22); pg.addColorStop(0, "#7fe3f0"); pg.addColorStop(1, "#1fa1c8");
+      ctx.fillStyle = STUCCO; rr(cx - 76, py0 - 4, 152, 28, 8); ctx.fill(); ctx.strokeStyle = LINE; ctx.lineWidth = 2; ctx.stroke();
+      ctx.fillStyle = pg; rr(cx - 70, py0, 140, 20, 7); ctx.fill(); ctx.stroke();
+      ctx.strokeStyle = "rgba(255,255,255,.7)"; ctx.lineWidth = 1.3; for (i = 0; i < 5; i++){ ctx.beginPath(); ctx.moveTo(cx - 56 + i * 24, py0 + 6); ctx.quadraticCurveTo(cx - 48 + i * 24, py0 + 2, cx - 40 + i * 24, py0 + 6); ctx.stroke(); }
+      if (lit){ ctx.save(); ctx.globalCompositeOperation = "lighter"; ctx.globalAlpha = 0.5; ctx.fillStyle = "#59e6ff"; rr(cx - 70, py0, 140, 20, 7); ctx.fill(); ctx.restore(); }
+      // loungers by the pool
+      [-52, -30, 30, 52].forEach(function(dx, k){ ctx.fillStyle = k % 2 ? "#fffaf0" : "#ffd23f"; rr(cx + dx - 6, py0 + 26, 12, 6, 2); ctx.fill(); ctx.strokeStyle = LINE; ctx.lineWidth = 1.2; ctx.stroke(); });
+      // gold plaque beside the gate: the sign + THE WORLD IS YOURS
+      var sign = String(b.sign || "KINGPIN'S MANSION").toUpperCase();
+      ctx.font = "900 12px Bungee, 'Nunito', sans-serif"; var sw = Math.max(150, ctx.measureText(sign).width + 26);
+      ctx.fillStyle = "#1b1410"; rr(cx - sw / 2, y + 22, sw, 22, 7); ctx.fill(); ctx.strokeStyle = GOLD; ctx.lineWidth = 2.4; ctx.stroke();
+      ctx.fillStyle = GOLD; ctx.textAlign = "center"; ctx.textBaseline = "middle"; ctx.fillText(sign, cx, y + 33);
+      ctx.font = "900 8.5px Nunito, sans-serif"; ctx.fillStyle = "#1b1410"; ctx.fillText("THE WORLD IS YOURS", cx, y + h - 10);
+      ctx.textAlign = "start"; ctx.textBaseline = "alphabetic";
+      // owned: a gold crown over the drive; for sale: a red banner
+      if (owned){ ctx.fillStyle = GOLD; ctx.strokeStyle = LINE; ctx.lineWidth = 1.6; ctx.beginPath(); ctx.moveTo(cx - 11, y + 62); ctx.lineTo(cx - 11, y + 52); ctx.lineTo(cx - 5, y + 57); ctx.lineTo(cx, y + 49); ctx.lineTo(cx + 5, y + 57); ctx.lineTo(cx + 11, y + 52); ctx.lineTo(cx + 11, y + 62); ctx.closePath(); ctx.fill(); ctx.stroke(); }
+      if (lit){   // gate lamps, lit windows already drawn
+        ctx.save(); ctx.globalCompositeOperation = "lighter"; ctx.globalAlpha = 0.55;
+        [[cx - 29, y - 22], [cx + 29, y - 22]].forEach(function(p){ ctx.drawImage(glowSprite, p[0] - 26, p[1] - 26, 52, 52); });
+        ctx.restore();
+      }
+    }
     function paintBuildingStatic(b, dark, biz){
+      if (b.id === "mansion"){ paintMansionEstate(b, dark); return; }
       var D = curDistrict(), P = D.pal, ST = hoodStyle(D.id), hid = hashStr(b.id + D.id);
       var wallC = mix(b.wall, P.wall, 0.38), roofC = mix(b.roof, P.roof, 0.38);
       if (ST.roof === "copper") roofC = tint(roofC, "#4aa38a", 0.45);
@@ -12376,7 +12790,7 @@
       licks.forEach(function(l){ ents.push({ x:l.x, y:l.y, fn:function(){
         l.role = "lick"; drawPerson(l, l);
         var lbz = lickBiz(l);
-        if (dist(player.x, player.y, l.x, l.y) < 140 && lbz){
+        if (dist(player.x, player.y, l.x, l.y) < 230 && lbz){
           // his badge tells his business: green $ = buying pieces,
           // blue B = buying BULK, gold ! = holding a pack FOR you
           var glyph = "$", bcol = "#0ea47a";
@@ -12986,6 +13400,14 @@
       for (var hk in base.held){ if (!knownHood(hk) || base.held[hk] !== true) delete base.held[hk]; }
       if (base.kpHit !== null && !(isPlain(base.kpHit) && knownHood(base.kpHit.hood) && typeof base.kpHit.name === "string")){ base.kpHit = null; fixed++; }
       if (!isPlain(base.mansion)) base.mansion = { chain:0, contract:null };
+      base.mansionOwned = base.mansionOwned === true;
+      if (base.dethroned !== null && !(isPlain(base.dethroned) && typeof base.dethroned.by === "string" && knownHood(base.dethroned.hood))) base.dethroned = null; else if (base.dethroned){ base.dethroned.by = base.dethroned.by.slice(0, 40); base.dethroned.day = Math.floor(nonNeg(base.dethroned.day, 1)); }
+      if (base.dethroned && base.tierIdx > 2) base.tierIdx = 2;
+      if (!isPlain(base.table)) base.table = { on:false, round:0, lvl:1, step:0, nextDay:0, duesDay:0, net:0, queue:[], allies:{}, trust:{} };
+      base.table.queue = (Array.isArray(base.table.queue) ? base.table.queue : []).filter(function(q){ return isPlain(q) && typeof q.type === "string"; }).slice(0, 6);
+      if (!isPlain(base.table.allies)) base.table.allies = {}; if (!isPlain(base.table.trust)) base.table.trust = {};
+      base.table.round = Math.floor(nonNeg(base.table.round, 0)); base.table.lvl = Math.max(1, Math.floor(nonNeg(base.table.lvl, 1))); base.table.step = clamp(Math.floor(nonNeg(base.table.step, 0)), 0, 2);
+      for (var tak in base.table.allies){ var tav = base.table.allies[tak]; if (!isPlain(tav) || typeof tav.until !== "number" || typeof tav.cut !== "number" || !knownHood(tav.hood)) delete base.table.allies[tak]; }
       base.mansion.chain = Math.floor(nonNeg(base.mansion.chain, 0));
       if (base.mansion.contract !== null && (!isPlain(base.mansion.contract) || typeof base.mansion.contract.kind !== "string" || typeof base.mansion.contract.goal !== "number" || !isFinite(base.mansion.contract.goal))) base.mansion.contract = null;
       if (typeof base.focus !== "string") base.focus = null; else base.focus = base.focus.slice(0, 20);
@@ -13117,6 +13539,7 @@
       if (obj.story === undefined && (base.tierIdx >= 1 || base.totalEarned >= 1500)) base.story = { beat: STORY_ACT1.length, flags: {} };
       base.jackboy = null; base.ship = null; base.beamTrvp = null; base.cloutFx = [];
       base.driving = false; base.escapeT = 0; base.chaseLeft = 0; base.holedUp = false; base.holedHood = null;
+      if (obj.mansionOwned === undefined && base.mansion && base.mansion.seen) base.mansionOwned = true;   // you already had the mansion before it had a price — it stays yours
       S = base;
       applyHoodLayout();
       if (fromBackup) saveGame();   // make the restored backup the live save
