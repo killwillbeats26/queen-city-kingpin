@@ -636,6 +636,11 @@
       .b-proj{ position:absolute; z-index:5; font-size:22px; line-height:1; pointer-events:none; }
       .b-sprite{ will-change:transform; }
       /* ---- map ---- */
+      .panelpop.boardpop{ max-height:none; }
+      .panelpop.boardpop .bdrow .gbtn{ flex:0 0 auto; white-space:nowrap; }
+      .panelpop.boardpop.show{ display:block; overflow-y:auto; -webkit-overflow-scrolling:touch; }
+      .stage .panelpop.boardpop{ left:6px; right:6px; top:6px; bottom:6px; max-height:none; }
+      @media (max-width:980px){ .stage .panelpop.boardpop{ position:fixed; left:8px; right:8px; top:56px; bottom:calc(10px + env(safe-area-inset-bottom, 0px)); z-index:96; } }
       .panelpop.mappop{ padding:8px 10px; max-height:none; }
       .panelpop.mappop.show{ display:flex; flex-direction:column; gap:6px; }
       .stage .panelpop.mappop{ left:6px; right:6px; top:6px; bottom:6px; max-height:none; }
@@ -1009,6 +1014,7 @@
           <div class="railbar"><span>GAME MENU</span><button class="popx" id="railClose" type="button" aria-label="Close menu">✕</button></div>
           <div class="settingsrow">
             <button class="tbtn" id="mapBtn" type="button">🗺 MAP</button>
+            <button class="tbtn" id="boardTopBtn" type="button">🏆 LEADERBOARD</button>
             <button class="tbtn" id="backupBtn" type="button">💾 BACKUP</button>
             <button class="tbtn" id="soundBtn" type="button">SOUND: ON</button>
             <button class="tbtn" id="viewBtn" type="button">VIEW: NORMAL</button>
@@ -1022,9 +1028,8 @@
           </div>
 
           <div class="panel">
-            <h2><span class="dot"></span>LEADERBOARD — THIS DEVICE</h2>
+            <h2><span class="dot"></span>LEADERBOARD</h2>
             <div id="boardBody" class="keys"></div>
-            <p class="fineprint" style="margin-top:8px">Real accounts on this device only — no fake profiles, ever. Cross-device accounts and one shared board arrive with the game server later.</p>
           </div>
           <div class="panel">
             <h2><span class="dot"></span>RUN IT UP — OBJECTIVES</h2>
@@ -1877,6 +1882,7 @@
         createdAt: Date.now(),  // account creation — first-seen timestamp; the Kingpin gate counts 7 real days from here (old saves start at "now")
         dayEarned: 0,           // earnings so far today — feeds the Biggest Day stat
         biggestDay: 0,          // best single-day earnings ever — rides the leaderboard
+        stats: {},              // lifetime counters for the big leaderboard: kills, hits, fights, robs, deals
         bribeGrace: 0,          // seconds of paid police grace left — no stops, no cruiser, while it runs
         crewMoveDay: { rob: 0, raid: 0 },   // in-game day each crew move was last used (one per day, each)
         raidFx: {},             // districtId -> game-minute timestamp when a tipped raid's price squeeze ends
@@ -2767,7 +2773,7 @@
       else if (k === "carry"){ c.goal = clamp(Math.round(invCap() * 0.7), 10, Math.max(400, invCap())); c.text = "Carry " + c.goal + " units of product at once, then hold it."; }
       else if (k === "beef"){ var bh = DISTRICTS.filter(function(d){ return beefIn(d.id) >= 15; }).sort(function(a, b){ return beefIn(b.id) - beefIn(a.id); })[0]; c.hood = bh.id; c.text = "Settle the beef in " + bh.nick + " — squash it, smooth it, or call the opps out (it has to drop under 8)."; c.deadlineDay = S.day + 3; }
       else { c.goal = Math.min(maxEnforcers(), (S.crew ? S.crew.enforcers : 0) + 1); c.text = "Put " + c.goal + " enforcer" + (c.goal > 1 ? "s" : "") + " on the payroll (UPGRADE → your crew)."; c.deadlineDay = S.day + 3; }
-      c.cash = Math.max(Math.round((55 + Math.min(chain, 120) * 16 + tier * 70) * CONTRACT_PAY[k] / 5) * 5, Math.round(funds() * 0.05 * CONTRACT_PAY[k] / 5) * 5);   // contracts pay a slice of what you're worth   // pay climbs for 120 contracts, then levels off (goals keep creeping up to their caps)
+      c.cash = jobCash(55 * CONTRACT_PAY[k], 0.05 * CONTRACT_PAY[k]);   // contracts pay a slice of what you're worth   // pay climbs for 120 contracts, then levels off (goals keep creeping up to their caps)
       c.clout = clamp(2 + Math.floor(chain / 4) + Math.floor(tier / 2), 2, 9);
       S.contract = c; S.lastContractKind = k;
       log("CONTRACT " + (chain + 1) + " from " + c.by + " — " + c.text + " Pays " + money(c.cash) + ".", "good");
@@ -2825,8 +2831,8 @@
       return Math.min(m.goal, m.prog);
     }
     function missionReward(){
-      if (S.mission && S.mission.kind === "story"){ var sb = storyBeat(); return sb ? sb.cash : 0; }
-      return 45 + (S.missionChain + 1) * 15 + S.tierIdx * 20;
+      if (S.mission && S.mission.kind === "story"){ var sb = storyBeat(); return sb && sb.cash ? jobCash(sb.cash, 0.04) : 0; }
+      return jobCash(45, 0.04);
     }
     function checkMission(){
       var m = S.mission; if (!m) return;
@@ -3555,7 +3561,7 @@
       var quiet = !st.flags["intro_" + b.id];     // already done before the beat even opened: close quietly
       S.mission = null;
       st.beat++;
-      if (b.cash) earn(b.cash, "Story: " + b.title);
+      if (b.cash) earn(jobCash(b.cash, 0.04), "Story: " + b.title);
       if (b.clout) addClout(b.clout, "story: " + b.title);
       toast("STORY — " + b.title + " ✓" + (b.cash ? " · " + money(b.cash) : ""));
       log("Act 1 beat done: " + b.title + (b.cash ? " (+" + money(b.cash) + ")" : ""), "good");
@@ -3858,9 +3864,9 @@
       S.cash += n; S.totalEarned += n; addIncome(incomeCat(why), n);
       try {
         var ws = String(why || "");
-        if (/^(Lick|BULK lick)/.test(ws)) contractEvent("deals", 1);
+        if (/^(Lick|BULK lick)/.test(ws)){ contractEvent("deals", 1); bumpStat("deals", 1); }
         else if (/^Sold \d+ \u00D7/.test(ws)){ var mm = /^Sold (\d+) \u00D7 (.+?) in /.exec(ws); contractEvent("sell", mm ? parseInt(mm[1], 10) : 1, mm ? mm[2] : null); }
-        else if (/^(Robbed|Grabbed|Crew hit|Loud crew hit)/.test(ws)) contractEvent("rob", 1);
+        else if (/^(Robbed|Grabbed|Crew hit|Loud crew hit)/.test(ws)){ contractEvent("rob", 1); bumpStat("robs", 1); }
         else if (/^Buyer car/.test(ws)) contractEvent("buyercar", 1);
       } catch(e){}
       S.dayEarned = (S.dayEarned || 0) + n;
@@ -3872,6 +3878,8 @@
     /* BILLS AND PAYMENTS come out of the STASH first, then pocket cash. (Theft and seizures still only touch pocket cash — that's what the stash is for.) */
     function funds(){ return (S.cash || 0) + (S.bank || 0); }
     // pay and loot follow your wealth: never less than the base, but a slice of what you're worth once you're rich (lo..hi = fraction of your funds)
+    // JOB / MISSION PAY follows your wealth ONLY (not rank or chain progress): a small flat floor so a broke player still gets something, otherwise a slice of what you're worth
+    function jobCash(base, pct){ return Math.max(Math.round(base / 5) * 5 || 5, Math.round(funds() * pct / 5) * 5); }
     function wealthPct(base, lo, hi){ return Math.max(Math.round(base), Math.round(funds() * (hi == null ? lo : rand(lo, hi)) / 5) * 5); }
     function payFunds(n){ n = Math.max(0, n); var fb = Math.min(S.bank || 0, n); S.bank = (S.bank || 0) - fb; S.cash -= (n - fb); return fb; }
     function spend(n, why){
@@ -4145,7 +4153,7 @@
         }
         if (S.quest === "none"){
           if (cd("plug") > 0) return { label: plugName + " is lining up the next package — ~" + Math.ceil(cd("plug")) + "s", run:function(){ toast(plugName + ": \"Give me a minute to line the next one up right. Work the block.\""); }, x: boss.x, y: boss.y };
-          return { label:"Talk to " + plugName + " — KINGPIN of " + curDistrict().nick + " · take a package run (" + money(120) + ")", run: startQuest, x: boss.x, y: boss.y };
+          return { label:"Talk to " + plugName + " — KINGPIN of " + curDistrict().nick + " · take a package run (" + money(jobCash(120, 0.01)) + ")", run: startQuest, x: boss.x, y: boss.y };
         }
         if (S.quest === "pickup") return { label: plugName + ": \"Pick it up at The Spot first.\"", run:function(){ toast(plugName + ": \"The package is at The Spot. Move.\""); }, x: boss.x, y: boss.y };
         return { label: plugName + ": \"Clock's ticking. " + buildingById("club").name + ". Go.\"", run:function(){ toast(plugName + ": \"" + buildingById("club").name + ". Don't be late.\""); }, x: boss.x, y: boss.y };
@@ -4298,7 +4306,7 @@
     // fit, picked clean. Nothing rides on "press A again" anymore.
     function storeMenu(){
       var opts = [
-        { label:"Work a shift — " + money(45), sub: cd("shift") > 0 ? "Register's on a real break — next shift opens in ~" + Math.ceil(cd("shift")) + "s. Shifts keep their own hours now." : "Honest money, no heat. Reed never looks twice at a working man.", disabled: cd("shift") > 0, run:function(){ setCd("shift", SHIFT_CD); earn(45, "Corner store shift"); toast("Shift done. " + money(45) + " in your pocket — register's on break a while."); } },
+        { label:"Work a shift — " + money(jobCash(45, 0.003)), sub: cd("shift") > 0 ? "Register's on a real break — next shift opens in ~" + Math.ceil(cd("shift")) + "s. Shifts keep their own hours now." : "Honest money, no heat. Reed never looks twice at a working man.", disabled: cd("shift") > 0, run:function(){ setCd("shift", SHIFT_CD); var shiftPay = jobCash(45, 0.003); earn(shiftPay, "Corner store shift"); toast("Shift done. " + money(shiftPay) + " in your pocket — register's on break a while."); } },
         { label:"Fresh fit — " + money(55) + " · +12 clout", sub: cd("fit") > 0 ? "You're already fresh — let it breathe." : "New fit off the rack. The block notices.", disabled: cd("fit") > 0, run: buyFit },
         { label:"Back to the block", sub:"Window-shop and walk away.", run: null }
       ];
@@ -4325,12 +4333,12 @@
       if (S.quest === "deliver"){
         var giver = questGiver(), giverHood = S.questHood || S.district;
         S.quest = "none"; S.questBy = null; S.questHood = null;
-        earn(120, "Delivery for " + giver);
+        var delPay = jobCash(120, 0.01); earn(delPay, "Delivery for " + giver);
         addClout(8, "ran " + giver + "'s package to " + buildingById("club").name); addHeat(8);
         addHoodClout(giverHood, 4, "ran " + giver + "'s package clean — he remembers");
         award("runner");
         setCd("plug", PLUG_CD);   // he needs time to line up the next package — no instant re-ups
-        toast("Delivered. " + giver + " sends his respect. +" + money(120) + " — he'll need a minute to line up the next one.");
+        toast("Delivered. " + giver + " sends his respect. +" + money(delPay) + " — he'll need a minute to line up the next one.");
         return;
       }
       // Skyline never closes — the night is whenever you say it is
@@ -4421,7 +4429,7 @@
       ];
       pool.sort(function(){ return Math.random() - 0.5; });
       S.dailies = { date: todayKey(), visits: {},
-        list: pool.slice(0, 3).map(function(p, i){ return { id:"d" + i, kind:p.kind, goal:p.goal, text:p.text, cash:Math.max(p.cash, wealthPct(0, 0.02)), clout:p.clout, prog:0, accepted:false, done:false }; }) };
+        list: pool.slice(0, 3).map(function(p, i){ return { id:"d" + i, kind:p.kind, goal:p.goal, text:p.text, cash:jobCash(60, 0.02), clout:p.clout, prog:0, accepted:false, done:false }; }) };
     }
     function ensureDailies(){ if (!S.dailies || S.dailies.date !== todayKey() || !S.dailies.list) genDailies(); }
     function dailyProg(kind, n, hoodId){
@@ -5623,26 +5631,43 @@
       var guards = crewGuards(); if (!guards.length) return;
       var td = buildingById("traphouse"); if (!td || !td.door) return;
       var tgt = null, kind = "";
-      if (S.jackboy && !S.jackboy._def && dist(S.jackboy.x, S.jackboy.y, td.door.x, td.door.y) < 560){ tgt = S.jackboy; kind = "jack"; }
-      else if (driveby && !driveby._def && dist(driveby.x, driveby.y, td.door.x, td.door.y) < 700){ tgt = driveby; kind = "driveby"; }
+      if (S.jackboy && !S.jackboy._def && dist(S.jackboy.x, S.jackboy.y, td.door.x, td.door.y) < 300 && inView(S.jackboy.x, S.jackboy.y, -30)){ tgt = S.jackboy; kind = "jack"; }
+      else if (driveby && !driveby._def && dist(driveby.x, driveby.y, td.door.x, td.door.y) < 340 && inView(driveby.x, driveby.y, -30)){ tgt = driveby; kind = "driveby"; }
       if (!tgt) return;
       tgt._def = true;   // one roll per attacker
       var n = Math.min(3, guards.length);
       if (Math.random() > 0.35 + 0.1 * n){ if (kind === "jack") toast("Your crew's watching the trap — " + (S.jackboy.name || "he") + " is out of their range."); return; }
-      for (var gi = 0; gi < n; gi++){ var g = guards[gi]; (function(g2, d){ setTimeout(function(){ fireAt(g2, tgt); flinch(tgt, 500); burst(tgt.x, tgt.y - 12, "#ffd23f", 6, 130); try { playSfx("alertSoft"); } catch(e){} }, d); })(g, gi * 140); }
-      addShake(5, 0.25);
-      var sx = tgt.x > WORLD_W / 2 ? 1 : -1;
-      if (kind === "jack"){
-        var j = S.jackboy, nm = j.name || "The jackboy", look = lookOfNpc(j), jx = j.x, jy = j.y;
-        jackGone(120); sendAway(nm, "hospital", rand(24, 48), "dropped by your crew outside the trap", S.district, true);
-        addClout(2, "your crew dropped " + nm); toast("Your crew opened up on " + nm + " outside the trap — he's down. Medics are coming.");
-        try { startOppAmbulance(look, nm, { x:jx, y:jy, sx:sx }, "ambulance"); } catch(e){}
-      } else {
-        var d0 = driveby, look2 = { skin:"#6b4423", shirt:"#7d1d27", pants:"#17171f", hair:"#101014", accent:"#ffd23f", shoes:"#14161d" }, dx0 = d0.x, dy0 = d0.y, crewNm = d0.crew || "The shooter";
-        driveby = null; addClout(3, "your crew shot down a drive-by");
-        toast("Your crew lit the drive-by up outside the trap — the shooters are done."); log("Your enforcers returned fire on the drive-by — nobody reached you.", "good");
-        try { startOppAmbulance(look2, crewNm, { x:dx0, y:dy0, sx:sx }, "ambulance"); } catch(e){}
-      }
+      var sx = tgt.x > WORLD_W / 2 ? 1 : -1, shooters = guards.slice(0, n), VOL = 7, jk = kind === "jack" ? S.jackboy : null;
+      toast("YOUR CREW OPENS UP — " + (kind === "jack" ? (jk.name || "the jackboy") : "the drive-by") + " is in their sights!", true); sndAlert();
+      shooters.forEach(function(g2){ aimAt(g2, tgt.x, tgt.y, 3600); });
+      /* a real firefight, a notch below the Kingpin scene: every guard fires a staggered volley (7 rounds each-ish), the target flinches on each hit, flashes and shake build, then he drops */
+      (function vol(i){
+        if (kind === "jack" ? (S.jackboy !== jk) : (driveby !== tgt)){ shooters.forEach(function(g2){ g2.aimUntil = 0; }); return; }   // he's gone (caught, beamed away...): stand down
+        if (jk){ jk.stagger = Math.max(jk.stagger || 0, 1.2); jk.speed = 0; }
+        shooters.forEach(function(g2, gi){ setTimeout(function(){ aimAt(g2, tgt.x, tgt.y, 1500); fireAt(g2, tgt); if (gi === 0 || i % 2) burst(tgt.x + rand(-10, 10), tgt.y - 12, "#ffd23f", 3, 110); }, gi * 90); });
+        if (i % 2 === 0) flinch(tgt, 380); addShake(i >= VOL - 2 ? 5 : 2.5, 0.18);
+        if (i + 1 < VOL){ setTimeout(function(){ vol(i + 1); }, 330); return; }
+        // the last volley lands
+        setTimeout(function(){
+          shooters.forEach(function(g2){ g2.aimUntil = 0; });
+          if (kind === "jack"){
+            if (S.jackboy !== jk) return;
+            var nm = jk.name || "The jackboy", look = lookOfNpc(jk), jx = jk.x, jy = jk.y;
+            bumpStat("kills", 1); jk.downAt = performance.now(); jk.moving = false; burst(jx, jy - 12, "#e63946", 8, 150); addShake(6, 0.3);
+            setTimeout(function(){
+              jk.downAt = 0; jackGone(120); sendAway(nm, "hospital", rand(24, 48), "dropped by your crew outside the trap", S.district, true);
+              addClout(2, "your crew dropped " + nm); toast("Your crew dropped " + nm + " outside the trap. Medics are coming.");
+              try { startOppAmbulance(look, nm, { x:jx, y:jy, sx:sx }, "ambulance"); } catch(e){}
+            }, 1000);
+          } else {
+            if (driveby !== tgt) return;
+            var look2 = { skin:"#6b4423", shirt:"#7d1d27", pants:"#17171f", hair:"#101014", accent:"#ffd23f", shoes:"#14161d" }, dx0 = tgt.x, dy0 = tgt.y, crewNm = tgt.crew || "The shooter";
+            driveby = null; addClout(3, "your crew shot down a drive-by");
+            toast("Your crew shot the drive-by to pieces — the shooters are done."); log("Your enforcers returned fire on the drive-by — nobody reached you.", "good");
+            try { startOppAmbulance(look2, crewNm, { x:dx0, y:dy0, sx:sx }, "ambulance"); } catch(e){}
+          }
+        }, 420);
+      })(0);
     }
     function npcBeefTick(dt){
       if (npcFight){
@@ -5668,9 +5693,11 @@
           F.volT -= dt;
           A.tx = A.x; A.ty = A.y; B.tx = B.x; B.ty = B.y; A.wait = 0; B.wait = 0; A.wt = 3; B.wt = 3;
           if (F.volT <= 0){
-            var sh = F.shooter, vi = F.victim, last = F.vol >= 3;
-            if (F.vol % 2 === 0 || last){ fireAt(sh.o, vi.o); if (last) flinch(vi.o, 700); } else { fireAt(vi.o, sh.o); }
-            burst((F.vol % 2 === 0 || last ? sh.o : vi.o).x, (F.vol % 2 === 0 || last ? sh.o : vi.o).y - 8, "#d4a017", 2, 70); addShake(3, 0.15); F.vol++; F.volT = 0.46;
+            var sh = F.shooter, vi = F.victim, last = F.vol >= 8, mine = (F.vol % 2 === 0 || last), who = mine ? sh.o : vi.o, tg = mine ? vi.o : sh.o;
+            /* same beat as the crew firefight: a long exchange, both men firing, rounds flying past, the target flinching on each hit, shake building; only the last one drops him */
+            if (mine){ fireAt(who, tg); if (last || F.vol % 4 === 0){ flinch(tg, 420); burst(tg.x + rand(-8, 8), tg.y - 12, "#ffd23f", 3, 110); } }
+            else { fireAt(who, { x:tg.x + rand(-55, 55), y:tg.y + rand(-20, 20) }); }
+            burst(who.x + (who.face || 1) * 18, who.y - 8, "#d4a017", 2, 70); addShake(F.vol >= 6 ? 4.5 : 2.5, 0.18); F.vol++; F.volT = 0.3;
             if (last){
               burst(vi.o.x, vi.o.y - 12, "#ffd23f", 8, 140); addShake(4, 0.2);
               var vn = vi.o.name || "Somebody", look = lookOfNpc(vi.o), vx = vi.o.x, vy = vi.o.y, hrs = rand(6, 16), vo = vi.o, kind = vi.kind, sho = sh.o;
@@ -6737,18 +6764,24 @@
         guideEl.style.top = gy + "px";
       }
     }
-    /* tap the badge: the full instruction again, and a way OUT of any job you can't or don't want to finish */
+    /* tap the badge: every active mission on one list. SELECT puts the nav arrow on it; ✕ takes it off the list. */
+    function hudMissionsHtml(){
+      var L = activeMissions(), h = "";
+      if (!L.length) h += '<p class="drumor">Nothing active right now — free roam. New contracts, dailies and story beats show up here.</p>';
+      var cur = S.focus || (S.spotJob ? "run" : (S.quest !== "none" ? "pkg" : (S.mission && S.mission.kind === "story" ? "story" : "chapter")));
+      L.forEach(function(m){
+        var on = cur === m.key;
+        h += hudRow((on ? "▶ " : "") + m.label, "", m.text + (on ? " · the arrow is on this" : ""),
+          hudBtn(on ? "ARROW ON THIS" : "SELECT", on ? "" : "buy", hudDo(function(){ S.focus = m.key; guideShownFor = ""; guideCache = ""; toast("Arrow on: " + m.label); renderObjectives(); }), on) +
+          (m.drop ? hudBtn("✕ REMOVE", "", hudDo(function(){ m.drop(); guideCache = ""; if (S.focus === m.key) S.focus = null; renderObjectives(); }), false) : ""));
+      });
+      if (S.storyPaused && storyActive()) h += hudRow("STORY PAUSED", "", "Pick the story beat back up (it replaces the current chapter).", hudBtn("RESUME THE STORY", "buy", hudDo(function(){ S.storyPaused = false; if (S.mission && S.mission.kind !== "story") S.mission = null; generateMission(); toast("Story resumed."); renderObjectives(); }), false));
+      h += '<p class="popfoot" style="margin-top:8px">SELECT aims the nav arrow at that mission. ✕ REMOVE drops it off the list (a new one may take its place). Tap the arrow badge anytime to open this.</p>';
+      return h;
+    }
     function showJobSheet(){
       if (menu || dialogue || battleState || S.jackboy || driveby) return;
-      var full = guideFull || (S.mission && S.mission.text) || "";
-      var opts = [{ label:"KEEP GOING", sub: full || "Nothing active right now — free roam.", run:null }];
-      activeMissions().forEach(function(m){
-        var cur = S.focus === m.key || (!S.focus && m.key === (S.spotJob ? "run" : (S.quest !== "none" ? "pkg" : (S.mission && S.mission.kind === "story" ? "story" : "chapter"))));
-        opts.push({ label:(cur ? "▶ FOLLOWING — " : "FOLLOW — ") + m.label, sub:m.text + (cur ? " · the arrow is on this" : " · point the arrow at it"), disabled:cur, run:function(){ S.focus = m.key; guideShownFor = ""; toast("Following: " + m.label); renderObjectives(); } });
-        if (m.drop) opts.push({ label:"DROP — " + m.label, sub:m.dropNote || "", danger:true, run:m.drop });
-      });
-      if (S.storyPaused && storyActive()) opts.push({ label:"RESUME THE STORY", sub:"Pick the story beat back up (it replaces the current chapter).", run:function(){ S.storyPaused = false; if (S.mission && S.mission.kind !== "story") S.mission = null; generateMission(); toast("Story resumed."); renderObjectives(); } });
-      openChoice("YOUR MISSIONS", opts, "Follow one to aim the arrow · drop the ones you don't want · tap the badge anytime for this · ↑↓ + A to pick · B closes");
+      openHud("missions");
     }
     guideEl.addEventListener("click", showJobSheet);
     function doInteract(){
@@ -7531,6 +7564,9 @@
       else if (k === "store"){ t = "DAY " + S.day + " · " + fmtClock(S.minutes) + " — STORE"; h = hudStoreHtml(); }
       else if (k === "pwr"){ t = "POWER-UPS"; h = hudPwrHtml(); }
       else if (k === "call"){ t = "CALL"; h = hudCallHtml(); }
+      else if (k === "missions"){ t = "YOUR MISSIONS"; h = hudMissionsHtml(); }
+      else if (k === "board"){ t = "🏆 LEADERBOARD"; h = hudBoardHtml(); }
+      hudPopEl.classList.toggle("boardpop", k === "board");
       title.textContent = t; body.innerHTML = h;
       body.querySelectorAll("[data-hact]").forEach(function(b){ b.addEventListener("click", function(){ if (uiLocked()) return; var f = hudActs[b.getAttribute("data-hact")]; if (f) f(); }); });
     }
@@ -8575,7 +8611,7 @@
       else if (k === "sell"){ c.goal = clamp(Math.round(20 + scale * 12), 20, 220); c.text = "Move " + c.goal + " units wholesale at The Spot."; }
       else if (k === "empire"){ c.goal = ownedProps() + 1; c.text = "Own " + c.goal + " properties — traps, stores and bars (you have " + ownedProps() + ")."; c.deadlineDay = S.day + 6; }
       else { c.goal = 1; c.text = "Take a hood from a rival kingpin — win a war (CALL → START A WAR)."; c.deadlineDay = S.day + 8; }
-      c.cash = Math.round(((900 + Math.min(chain, 150) * 70 + (S.tierIdx | 0) * 150) * MANSION_PAY[k] + funds() * 0.03) / 25) * 25;
+      c.cash = Math.round(jobCash(300 * MANSION_PAY[k], 0.06 * MANSION_PAY[k]) / 25) * 25;
       c.clout = clamp(4 + Math.floor(chain / 5), 4, 14);
       S.mansion.contract = c; S.mansion.last = k;
       log("MANSION CONTRACT " + (chain + 1) + " — " + c.text + " Pays " + money(c.cash) + ".", "good");
@@ -9101,7 +9137,7 @@
             startRetal(hood, randi(1, 2), h.crew);
             if (atWar) warScore(hood, 1, "you hit one of theirs");
           }
-          contractEvent("hit", 1);
+          contractEvent("hit", 1); bumpStat("hits", 1); bumpStat("kills", 1);
           startOppAmbulance(h.look, h.kind === "opp" ? h.crew.replace(/'s (people|crew)$/, "") + " opp" : h.crew, { x:T.x, y:T.y, sx:h.sx });
           sp.forEach(function(s){ s.moving = true; s.face = -h.sx; });
         }
@@ -9750,7 +9786,7 @@
       var d = districtById(destId);
       var km = kind === "hit" ? 1.6 : (kind === "collect" ? 1.25 : 1.0);
       var risk = 1 + Math.max(0, (d.heat || 1) - 1) * 0.9 + Math.max(0, (d.jack || 1) - 1) * 0.6;
-      return Math.max(Math.round((70 + d.mins * 1.1) * risk * km / 5) * 5, Math.round(funds() * 0.03 * risk * km / 5) * 5);
+      return jobCash((70 + d.mins * 1.1) * risk * km, 0.03 * risk * km);
     }
     function jobTitle(j){
       var dn = districtById(j.dest).nick;
@@ -10318,6 +10354,7 @@
     }
     function fightEnd(f, won, lines){
       f.over = true; f.busy = false; var E = fxEls();
+      if (won && !f.fled){ bumpStat("fights", 1); bumpStat("kills", f.group ? f.group.length : 1); }
       if (won) fxKO(E.opp); else fxKO(E.me);
       lines.push(won ? (f.group ? "<b>All " + f.group.length + " are down.</b> You won the fight!" : "<b>" + (f.cfg.oppName || "He") + " is done.</b> You win the fight!") : "<b>You're down.</b> " + (f.group ? "The crew" : (f.cfg.oppName || "He")) + " wins this one.");
       f.log = lines.join("<br>");
@@ -11694,6 +11731,15 @@
     /* EMPIRE SCORE — the one number that says how big you've gotten:
        net worth + name (clout) + tier + achievements + story + traps.
        The street board ranks you on it. */
+    function bumpStat(k, n){ if (!S) return; if (!S.stats || typeof S.stats !== "object") S.stats = {}; S.stats[k] = Math.min(1e12, (+S.stats[k] || 0) + (n == null ? 1 : n)); }
+    /* every number the big leaderboard ranks, in one place (also what the online profile syncs) */
+    function myStats(){
+      var st = S.stats || {}, traps = 0, hoods = 0, k;
+      for (k in S.traps) if (S.traps[k] && S.traps[k].owned) traps++;
+      for (k in (S.held || {})) if (S.held[k]) hoods++;
+      return { money:Math.round(funds()), earned:Math.round(S.totalEarned || 0), kills:st.kills | 0, hits:st.hits | 0, fights:st.fights | 0, robs:st.robs | 0, deals:st.deals | 0,
+               biggest:Math.round(Math.max(S.biggestDay || 0, S.dayEarned || 0)), clout:Math.round(S.clout || 0), busts:S.booked | 0, er:S.erVisits | 0, contracts:S.jobChain | 0, traps:traps, hoods:hoods };
+    }
     function empireScore(){
       var worth = S.cash + (S.bank || 0) + invValue();
       if (S.car){ var cc = carById(S.car); if (cc) worth += Math.round(cc.price * 0.6); }
@@ -14165,7 +14211,7 @@
     function syncRegistryEntry(){
       if (!S || !S.username) return;
       var entry = { name: S.username, lookIdx: S.lookIdx || 0, empire: empireScore(), tier: TIERS[S.tierIdx].name, home: S.home, day: S.day, updated: Date.now(),
-                    biggestDay: Math.max(S.biggestDay || 0, S.dayEarned || 0) };
+                    biggestDay: Math.max(S.biggestDay || 0, S.dayEarned || 0), stats: myStats() };
       // weekly season bookkeeping: your season score is the empire you
       // gained since Monday — when the week rolls, the base resets
       var sk = seasonKey(), prev = findAccount(S.username);
@@ -14443,7 +14489,7 @@
       snap.jackboy = null; snap.ship = null; snap.beamTrvp = null; snap.cloutFx = []; snap.driving = false; snap.holedUp = false; snap.holedHood = null; snap.saveVersion = SAVE_VERSION;
       return snap;
     }
-    function cloudMeta(){ var a = (S.username && findAccount(S.username)) || {}; return { empire:empireScore(), day:S.day, tier:TIERS[S.tierIdx].name, home:S.home, look:S.lookIdx || 0, seasonKey:seasonKey(), seasonGain:a.sGain || 0 }; }
+    function cloudMeta(){ var a = (S.username && findAccount(S.username)) || {}; return { empire:empireScore(), day:S.day, tier:TIERS[S.tierIdx].name, home:S.home, look:S.lookIdx || 0, seasonKey:seasonKey(), seasonGain:a.sGain || 0, stats:myStats() }; }
     function cloudLineText(){
       if (!cloudActive()) return "";
       if (cloud.paused) return "⚠ ONLINE SYNC PAUSED — another phone played this profile.";
@@ -14931,33 +14977,152 @@
       if (s) s.addEventListener("click", function(){ boardTab = "season"; renderBoard(); });
       if (a2) a2.addEventListener("click", function(){ boardTab = "all"; renderBoard(); });
     }
+    /* the rail only holds the BUTTON now; the board itself is the big full-screen panel below */
     function renderBoard(){
-      var el = document.getElementById("boardBody");
-      if (!el) return;
-      if (cloudOn() && boardScope === "world"){ renderWorldBoard(el); return; }
-      var accts = loadAccounts().slice();
-      // whoever's playing sees their live number, not the last autosave's
-      if (S.username){
-        var live = empireScore(), seen = false;
-        accts.forEach(function(a){ if (String(a.name).toLowerCase() === String(S.username).toLowerCase()){ a.empire = live; a.tier = TIERS[S.tierIdx].name; a.biggestDay = Math.max(S.biggestDay || 0, S.dayEarned || 0); if (a.sKey === seasonKey()) a.sGain = Math.max(0, live - (a.sBase != null ? a.sBase : live)); seen = true; } });
-        if (!seen) accts.push({ name: S.username, lookIdx: S.lookIdx || 0, empire: live, tier: TIERS[S.tierIdx].name, biggestDay: Math.max(S.biggestDay || 0, S.dayEarned || 0), sGain: 0 });
-      }
-      var key = boardTab === "season" ? "sGain" : "empire";
-      accts.sort(function(a, b){ return ((b[key] || 0) - (a[key] || 0)) || ((b.empire || 0) - (a.empire || 0)); });
-      var html = boardHeaderHtml();
-      if (!accts.length){
-        el.innerHTML = html + "<span>No real players on this device yet. The board fills in the moment somebody creates an account here — no fake profiles, ever.</span>";
-        bindBoardTabs();
-        return;
-      }
-      accts.forEach(function(a, i){
-        var me = !!S.username && String(a.name).toLowerCase() === String(S.username).toLowerCase();
-        html += '<div class="boardrow' + (me ? " me" : "") + '"><span class="brank">#' + (i + 1) + '</span><span class="lookface">' + lookSwatch(a.lookIdx) + '</span><span class="bname">' + esc(String(a.name).toUpperCase()) + (me ? " (YOU)" : "") + '</span><span style="color:var(--ink-soft); font-size:11px; font-weight:800">' + esc(a.tier || "") + ' · BIG DAY ' + money(a.biggestDay || 0) + '</span><span class="bscore">' + (boardTab === "season" ? "+" + ((a.sGain || 0).toLocaleString("en-US")) : (a.empire || 0).toLocaleString("en-US")) + "</span></div>";
+      var el = document.getElementById("boardBody"); if (!el) return;
+      if (!el.firstChild) el.innerHTML = '<span>Every player ranked by empire, money, kills, hits and more — see who is near you and scroll the whole city.</span><span><button class="gbtn buy" id="openBoardBtn" type="button" style="width:100%; font-size:15px; padding:11px">🏆 OPEN THE LEADERBOARD</button></span>';
+      ["openBoardBtn", "boardTopBtn"].forEach(function(id){
+        var btn = document.getElementById(id);
+        if (btn && !btn._bound){
+          btn._bound = true; var last = 0;
+          var go = function(ev){ var n = Date.now(); if (n - last < 400) return; last = n; if (ev && ev.preventDefault) ev.preventDefault(); openBigBoard(); };
+          btn.addEventListener("click", go); btn.addEventListener("pointerup", go);
+        }
       });
-      if (accts.length === 1) html += '<p class="fineprint" style="margin-top:8px">Just you on this device so far — real players only, so the board grows as accounts get created here.</p>';
-      el.innerHTML = html;
-      bindBoardTabs();
     }
+    /* ================= THE BIG LEADERBOARD =================
+       Full-screen panel (HUD kind "board"): pick what to rank by (empire, money, kills, hits, ...), see YOUR rank, the players AROUND you, and the whole city
+       scrolling underneath. WORLD uses the server (qck_board / qck_board_near from supabase_fix4.sql); THIS DEVICE ranks the accounts on this browser. */
+    var BOARD_STATS = [
+      { k:"empire",    label:"EMPIRE",     icon:"👑" }, { k:"money",   label:"MONEY",      icon:"💵", usd:1 }, { k:"kills",   label:"KILLS",      icon:"💀" },
+      { k:"hits",      label:"HITS",       icon:"🎯" }, { k:"earned",  label:"EARNED",     icon:"📈", usd:1 }, { k:"fights",  label:"FIGHTS WON", icon:"🥊" },
+      { k:"robs",      label:"ROBBERIES",  icon:"🕶️" }, { k:"deals",   label:"DEALS",      icon:"🤝" }, { k:"biggest", label:"BEST DAY",   icon:"🔥", usd:1 },
+      { k:"clout",     label:"CLOUT",      icon:"⭐" }, { k:"season",  label:"THIS WEEK",  icon:"📅" }, { k:"contracts", label:"CONTRACTS", icon:"📋" },
+      { k:"traps",     label:"TRAP HOUSES",icon:"🏚️" }, { k:"hoods",   label:"HOODS HELD", icon:"🗺️" }, { k:"busts",   label:"BUSTS",      icon:"🚔" },
+      { k:"er",        label:"ER TRIPS",   icon:"🏥" }, { k:"days",    label:"DAYS",       icon:"🗓️" }
+    ];
+    var BD = { scope:null, sort:"empire", cache:{}, shown:40, legacy:false, jump:false };
+    function bdScope(){ return BD.scope || (cloudOn() ? "world" : "local"); }
+    function bdDef(k){ for (var i = 0; i < BOARD_STATS.length; i++) if (BOARD_STATS[i].k === k) return BOARD_STATS[i]; return BOARD_STATS[0]; }
+    function bdVal(r, k){ var st = r.stats || {}; if (k === "empire") return +r.empire || 0; if (k === "season") return +(r.season_gain != null ? r.season_gain : r.sGain) || 0; if (k === "days") return +r.day || 0; return +st[k] || 0; }
+    function bdCompact(n, usd){
+      var a = Math.abs(Math.round(n)), t;
+      if (a >= 1e12) t = (a / 1e12).toFixed(2) + "T"; else if (a >= 1e9) t = (a / 1e9).toFixed(2) + "B"; else if (a >= 1e6) t = (a / 1e6).toFixed(2) + "M"; else if (a >= 1e4) t = (a / 1e3).toFixed(1) + "K"; else t = a.toLocaleString("en-US");
+      return (usd ? "$" : "") + t;
+    }
+    function bdFmt(k, v){ return bdCompact(v, !!bdDef(k).usd); }
+    function bdIsMe(name){ return !!S.username && String(name).toLowerCase() === String(S.username).toLowerCase(); }
+    function bdLocalRows(){
+      var accts = loadAccounts().slice(), live = S.username ? myStats() : null, seen = false;
+      var rows = accts.map(function(a){
+        var me = bdIsMe(a.name), r = { username:a.name, look:a.lookIdx || 0, empire:a.empire || 0, tier:a.tier || "Rookie", day:a.day || 1, season_gain:a.sGain || 0, stats:a.stats || {} };
+        if (me){ seen = true; r.empire = empireScore(); r.tier = TIERS[S.tierIdx].name; r.day = S.day; r.stats = live; }
+        return r;
+      });
+      if (S.username && !seen) rows.push({ username:S.username, look:S.lookIdx || 0, empire:empireScore(), tier:TIERS[S.tierIdx].name, day:S.day, season_gain:0, stats:live });
+      var k = BD.sort;
+      rows.sort(function(x, y){ return (bdVal(y, k) - bdVal(x, k)) || (y.empire - x.empire); });
+      rows.forEach(function(r, i){ r.rank = i + 1; });
+      return rows;
+    }
+    var bdRefreshQ = 0;
+    function bdRefresh(){   // always async: a callback that fires synchronously can never re-enter the render
+      if (bdRefreshQ) return; bdRefreshQ = setTimeout(function(){ bdRefreshQ = 0; bdRefreshNow(); }, 0);
+    }
+    function bdRefreshNow(){
+      if (menu !== "hud" || hudKind !== "board") return;
+      var sc = hudPopEl.scrollTop;   // the whole popup is the scroller
+      renderHud(); hudPopEl.scrollTop = sc;
+    }
+    function bdFetch(sort, more){
+      if (!cloudOn()) return;
+      var c = BD.cache[sort] = BD.cache[sort] || { rows:[], total:0, near:null, err:"", busy:false, at:0 };
+      if (c.busy) return;
+      if (!more && c.at && Date.now() - c.at < 30000) return;
+      c.busy = true;
+      var off = more ? c.rows.length : 0;
+      function legacy(){
+        cloudCall("qck_leaderboard", { p_kind:"alltime", p_season:seasonKey(), p_limit:100 }, function(e2, rows){
+          c.busy = false; c.at = Date.now();
+          if (e2){ c.err = e2.netErr ? "offline" : String(e2.message || "error"); }
+          else { BD.legacy = true; c.err = ""; c.rows = (rows || []).map(function(r, i){ return { rank:i + 1, username:r.username, empire:r.empire, tier:r.tier, day:r.day, look:r.look, season_gain:r.season_gain, stats:{} }; }); c.total = c.rows.length; }
+          bdRefresh();
+        });
+      }
+      if (BD.legacy && !more){ legacy(); return; }
+      cloudCall("qck_board", { p_sort:sort, p_season:seasonKey(), p_limit:100, p_offset:off }, function(err, res){
+        if (err){
+          if (!more && (err.status === 404 || /function|schema cache|could not find/i.test(String(err.message || "")))){ legacy(); return; }
+          c.busy = false; c.at = Date.now(); c.err = err.netErr ? "offline" : String(err.message || "error"); bdRefresh(); return;
+        }
+        c.busy = false; c.err = ""; c.at = Date.now();
+        var rows = (res && res.rows) || []; c.rows = more ? c.rows.concat(rows) : rows; c.total = (res && res.total) || c.rows.length;
+        bdRefresh();
+      });
+      if (!more && cloudActive() && !BD.legacy) cloudCall("qck_board_near", { p_token:cloud.token, p_sort:sort, p_season:seasonKey(), p_span:5 }, function(e, res){ c.near = (!e && res && res.rank) ? res : null; bdRefresh(); });
+    }
+    function bdRowHtml(r, rank, k){
+      var me = bdIsMe(r.username), subs = ["money", "kills", "hits", "deals", "fights"].filter(function(x){ return x !== k; }).slice(0, 3);
+      var sub = subs.map(function(x){ var d = bdDef(x); return d.icon + " " + bdFmt(x, bdVal(r, x)); }).join("  ·  ");
+      return '<div class="boardrow bd' + (me ? " me" : "") + '"' + (me ? ' data-bdme="1"' : "") + '><span class="brank">#' + rank + '</span><span class="lookface" style="margin:0">' + lookSwatch(r.look || 0) + '</span>' +
+        '<span class="bname" style="min-width:0">' + esc(String(r.username).toUpperCase()) + (me ? " (YOU)" : "") + '<small class="bdsub" style="display:block; font-weight:800; color:var(--ink-soft); font-size:11px; white-space:normal">' + esc(r.tier || "") + ' · Day ' + (r.day | 0) + (BD.legacy ? "" : "  ·  " + sub) + '</small></span>' +
+        '<span class="bscore">' + bdFmt(k, bdVal(r, k)) + '</span></div>';
+    }
+    function hudBoardHtml(){
+      var k = BD.sort, d = bdDef(k), scope = bdScope(), h = "", rows, total, near = null, myRank = null, c = null, status = "";
+      if (scope === "world"){
+        c = BD.cache[k]; if (!c) bdFetch(k, false); else if (!c.busy && Date.now() - c.at > 30000) bdFetch(k, false);
+        c = BD.cache[k] || { rows:[], total:0, near:null, err:"", busy:true, at:0 };
+        rows = c.rows; total = c.total; near = c.near && c.near.rows && c.near.rows.length ? c.near : null; myRank = c.near ? c.near.rank : null;
+        if (c.busy && !rows.length) status = "Loading the city's players…"; else if (c.err && !rows.length) status = "Can't reach the world board (" + esc(c.err) + "). Tap TRY AGAIN, or THIS DEVICE.";
+        else if (!rows.length) status = "Nobody on the world board yet — put your profile online and be the first.";
+        if (BD.legacy && k !== "empire") status = "The server isn't upgraded for stat boards yet (supabase_fix4.sql) — online ranking is EMPIRE only for now. Showing empire order.";
+      } else {
+        rows = bdLocalRows(); total = rows.length;
+        for (var i = 0; i < rows.length; i++) if (bdIsMe(rows[i].username)){ myRank = rows[i].rank; near = { rank:myRank, rows:rows.slice(Math.max(0, i - 5), i + 6) }; }
+      }
+      // sticky controls
+      h += '<div class="bdctl" style="position:sticky; top:-12px; z-index:3; background:var(--panel); padding:6px 0 8px; margin:-6px 0 4px; border-bottom:2px solid var(--chip)">';
+      h += '<div class="bdrow" style="display:flex; gap:6px; margin-bottom:6px; overflow-x:auto; -webkit-overflow-scrolling:touch; padding-bottom:2px">';
+      if (cloudOn()) h += hudBtn("🌐 WORLD", scope === "world" ? "buy" : "", hudDo(function(){ BD.scope = "world"; BD.shown = 40; }), false) + hudBtn("📱 THIS DEVICE", scope === "local" ? "buy" : "", hudDo(function(){ BD.scope = "local"; BD.shown = 40; }), false);
+      else h += '<b style="font-size:12px">📱 THIS DEVICE</b>';
+      h += hudBtn("⤒ TOP", "", function(){ hudPopEl.scrollTop = 0; }, false);
+      h += hudBtn("📍 FIND ME", "", function(){ var m = document.querySelector('#hudBody [data-bdme="1"]'); if (m) m.scrollIntoView({ block:"center" }); else toast("You're not in the loaded rows yet — tap SHOW MORE."); }, false) + '</div>';
+      h += '<div class="bdrow" style="display:flex; gap:5px; overflow-x:auto; -webkit-overflow-scrolling:touch; padding-bottom:3px">';
+      BOARD_STATS.forEach(function(sd){ h += hudBtn(sd.icon + " " + sd.label, sd.k === k ? "buy" : "", hudDo(function(){ BD.sort = sd.k; BD.shown = 40; hudPopEl.scrollTop = 0; }), false); });
+      h += '</div></div>';
+      // my card
+      var mine = S.username ? myStats() : null;
+      if (S.username){
+        var mv = k === "empire" ? empireScore() : k === "season" ? ((findAccount(S.username) || {}).sGain || 0) : k === "days" ? S.day : mine[k];
+        h += '<div class="grow" style="background:var(--chip); border-radius:10px; padding:8px 10px; margin:4px 0"><span class="gname" style="min-width:0">' + d.icon + ' YOU · ' + esc(String(S.username).toUpperCase()) + '</span>' +
+          '<span class="gprice">' + (myRank ? "RANK #" + myRank + (total ? " of " + total : "") : (scope === "world" && !cloudActive() ? "NOT ONLINE" : "—")) + '</span>' +
+          '<span class="drumor" style="flex-basis:100%">' + d.label + ': <b>' + bdFmt(k, mv) + '</b>  ·  💵 ' + bdCompact(mine.money, 1) + '  ·  💀 ' + mine.kills + ' kills  ·  🎯 ' + mine.hits + ' hits  ·  🥊 ' + mine.fights + ' fights  ·  🤝 ' + mine.deals + ' deals  ·  ⭐ ' + mine.clout + ' clout</span></div>';
+        if (scope === "world" && !cloudActive()) h += '<p class="fineprint">Your profile isn\'t online, so you\'re not on the world board. Menu → account → ☁ SAVE MY PROFILE ONLINE.</p>';
+      } else h += '<p class="fineprint">Sign in to appear on the board.</p>';
+      if (status) h += '<p class="popfoot" style="margin:8px 0">' + status + '</p>';
+      if (scope === "world" && c && c.err && !c.busy) h += '<div style="margin:4px 0 8px">' + hudBtn("TRY AGAIN", "buy", function(){ c.at = 0; c.err = ""; bdFetch(k, false); bdRefresh(); }, false) + '</div>';
+      if (near){
+        h += hudHead("📍 AROUND YOU");
+        near.rows.forEach(function(r){ h += bdRowHtml(r, r.rank, k); });
+      }
+      h += hudHead("ALL PLAYERS — BY " + d.label + (total ? " (" + total + ")" : ""));
+      var shown = Math.min(rows.length, BD.shown);
+      for (var j = 0; j < shown; j++) h += bdRowHtml(rows[j], rows[j].rank || (j + 1), k);
+      if (rows.length > shown) h += '<div style="margin:8px 0; text-align:center">' + hudBtn("SHOW MORE (" + (rows.length - shown) + " loaded)", "buy", hudDo(function(){ BD.shown += 60; }), false) + '</div>';
+      else if (scope === "world" && c && !BD.legacy && rows.length < total) h += '<div style="margin:8px 0; text-align:center">' + hudBtn(c.busy ? "LOADING…" : "LOAD MORE PLAYERS", "buy", function(){ bdFetch(k, true); BD.shown += 100; }, !!c.busy) + '</div>';
+      else if (rows.length) h += '<p class="popfoot" style="text-align:center">— end of the board —</p>';
+      return h;
+    }
+    function openBigBoard(){
+      if (battleState || rescue) { toast("Not right now."); return; }
+      if (document.body.classList.contains("menu-open")) closeRailMenu();
+      BD.shown = 40;
+      openHud("board");
+      hudPopEl.scrollTop = 0;
+      if (menu !== "hud") { toast("Finish what you're doing first."); }
+    }
+    document.addEventListener("keydown", function(ev){ if (ev.key === "Escape" && menu === "hud" && hudKind === "board") closeMenu(); });
 
     /* ---------------- dark-mode contrast guard ----------------
        Some rows are painted with a light inline background (can't afford, owned, warnings…). In dark mode their text inherits the light ink color — light on light.
