@@ -4359,7 +4359,7 @@
       { cost:400, pct:0.22, stars:99, grace:600 }
     ];
     // the fold is a floor or a slice of the cash you're carrying: a fat wallet pays fat
-    var BRIBE_TIERS = BRIBE_BASE.map(function(b){ return { base:b.cost, pct:b.pct, stars:b.stars, grace:b.grace, get cost(){ return Math.min(20000, Math.max(b.cost, Math.round(funds() * b.pct / 5) * 5)); } }; });
+    var BRIBE_TIERS = BRIBE_BASE.map(function(b){ return { base:b.cost, pct:b.pct, stars:b.stars, grace:b.grace, get cost(){ return Math.max(b.cost, Math.round(funds() * b.pct / 5) * 5); } }; });
     function bribeSummary(){ return BRIBE_TIERS.map(function(bt){ return money(bt.cost) + ": " + (bt.stars >= 99 ? "ALL stars" : bt.stars + (bt.stars === 1 ? " star" : " stars")) + " + " + Math.round(bt.grace / 60) + " min grace"; }).join(" · "); }
     function bribeTierLabel(bt){
       return "Clear " + (bt.stars >= 99 ? "ALL stars" : bt.stars + (bt.stars === 1 ? " star" : " stars")) + " + " + Math.round(bt.grace / 60) + " min grace — no stops while it runs";
@@ -10660,9 +10660,27 @@
           if (d > 0.01){ nx = ddx / d; ny = ddy / d; } else { nx = px - (sd.x + sd.w / 2); ny = py - (sd.y + sd.h / 2); var nl = Math.sqrt(nx * nx + ny * ny) || 1; nx /= nl; ny /= nl; d = 0; }
           if (d < clear){ var w = (1 - d / clear) * wgt; ax += nx * w; ay += ny * w; speedK = Math.min(speedK, 1 - 0.4 * w); }
         }
+        // street edge: if the look-ahead point is off the asphalt, bend the steering back toward the road
+        var onRoad = false, rs = carRects || [];
+        for (var ri = 0; ri < rs.length; ri++){ var rr0 = rs[ri]; if (px >= rr0.x && px <= rr0.x + rr0.w && py >= rr0.y && py <= rr0.y + rr0.h){ onRoad = true; break; } }
+        if (!onRoad && rs.length){ var nrp = nearestRoadPoint(px, py), ex = nrp.x - px, ey = nrp.y - py, el = Math.sqrt(ex * ex + ey * ey); if (el > 1){ var ew = Math.min(1, el / 60) * wgt; ax += ex / el * ew; ay += ey / el * ew; speedK = Math.min(speedK, 1 - 0.3 * ew); } }
+      }
+      // dead end / street edge dead ahead: ease off the gas over the last ~250px so the car rolls to a stop instead of hitting the end at full speed
+      var rs2 = carRects || [];
+      if (rs2.length && (Math.abs(dx) > 0.92 || Math.abs(dy) > 0.92)){
+        for (var D = 70; D <= 300; D += 38){
+          var qx = player.x + dx * D, qy = player.y + dy * D, ok = false;
+          for (var qi = 0; qi < rs2.length; qi++){ var q = rs2[qi]; if (qx >= q.x && qx <= q.x + q.w && qy >= q.y && qy <= q.y + q.h){ ok = true; break; } }
+          if (!ok){ speedK = Math.min(speedK, clamp(0.22 + (D - 70) / 300, 0.22, 1)); break; }
+        }
+      }
+      // map edge dead ahead (any heading): same gentle ease-off
+      for (var D2 = 70; D2 <= 300; D2 += 38){
+        var wx = player.x + dx * D2, wy = player.y + dy * D2;
+        if (wx < 45 || wx > WORLD_W - 45 || wy < 45 || wy > WORLD_H - 45){ speedK = Math.min(speedK, clamp(0.22 + (D2 - 70) / 300, 0.22, 1)); break; }
       }
       var ox = dx + ax * 0.95, oy = dy + ay * 0.95, ol = Math.sqrt(ox * ox + oy * oy) || 1;
-      return [ox / ol * len, oy / ol * len, Math.max(0.55, speedK)];
+      return [ox / ol * len, oy / ol * len, Math.max(0.2, speedK)];
     }
     function roadClamp(){
       var rects = carRects || [];
@@ -10679,8 +10697,12 @@
       var moved = Math.sqrt(bd);
       var spdNow = Math.sqrt(player.vx * player.vx + player.vy * player.vy);
       player.x = bx; player.y = by;
-      if (moved > 1){ player.vx *= 0.3; player.vy *= 0.3; }
-      if (moved > 3 && spdNow > 350){ burst(bx, by, "#ffd76e", 7, 130); burst(bx, by, "#9aa3b0", 5, 90); addShake(7, 0.25); }   // curb kiss at speed: sparks + a jolt
+      // SLIDE along the street edge: only the part of the velocity pointing off the road is removed; the along-the-curb part is kept, so the car glides instead of stopping dead
+      if (moved > 0.5){
+        var ox = -(bx - player.x) / moved, oy = -(by - player.y) / moved, vOut = player.vx * ox + player.vy * oy;
+        if (vOut > 0){ player.vx -= ox * vOut * 0.9; player.vy -= oy * vOut * 0.9; }
+        if (moved > 6 && vOut > 380){ burst(bx, by, "#ffd76e", 4, 100); addShake(2.5, 0.15); }   // only a hard head-on hit gets a small jolt
+      }
     }
     // nearest point of the drivable grid (car-center rects) to x,y —
     // inside a rect, that's the point itself
