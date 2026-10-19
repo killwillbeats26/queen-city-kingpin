@@ -1499,7 +1499,7 @@
         if (battleState.type === "cop") return "cop";
         if (battleState.type === "jackboy") return "jack";
       }
-      if (S.jackboy && (S.ghostTime || 0) <= 0) return "jack";
+      if ((S.jackboy || (typeof plugVan !== "undefined" && plugVan && plugVan.active)) && (S.ghostTime || 0) <= 0) return "jack";
       // PURSUIT-based, not star-based: the chase theme means a chase is
       // actually on — Reed hunting (his mode is "chase") or the cruiser
       // rolling on you. Stars alone don't cut it: a star or two with
@@ -1806,8 +1806,8 @@
         // --- Trvp (alien guide) ---
         trvpCd: 0,              // ship recharge timer (seconds)
         trvpTalks: 0,           // rotates his tips
-        ghostTime: 0,           // seconds of Ghost Mode remaining
-        ghostCd: 0,             // seconds until Ghost Mode can be used / dropped again (starts when you activate it)
+        ghostTime: 0,           // seconds of Beam Up remaining
+        ghostCd: 0,             // seconds until Beam Up can be used / dropped again (starts when you activate it)
         ship: null,             // spaceship summon animation state
         beamTrvp: null,         // Trvp beamed down during a summon
         hints: {},              // one-time hint flags
@@ -2181,6 +2181,7 @@
     function hoodLayout(){ return HOOD_LAYOUTS[S.district] || HOOD_LAYOUTS.dtw; }
     var _mapSeenInit = false;
     function applyHoodLayout(){
+      try { if (typeof updateAway === "function" && S && S.away) updateAway(); } catch(e){}   // anyone whose time is up is back the moment you load the hood
       var L = hoodLayout();
       if (S){ if (!S.visited) S.visited = {}; if (!S.visited[S.district]){ S.visited[S.district] = true; } _mapSeenInit = true; }
       for (var mi = buildings.length - 1; mi >= 0; mi--) if (buildings[mi].id === "mansion") buildings.splice(mi, 1);
@@ -2917,8 +2918,8 @@
         done:function(f){ return !!f.lick; },
         guide:function(){ return nearestLickGuide("STORY: serve a customer — walk up and press A"); } },
       { id:"a1_ghost", title:"Trvp's Gift", cash:25, clout:2, who:"TRVP",
-        text:function(){ return "Press G to try Ghost Mode — jackboys and Reed can't see you for eight seconds."; },
-        intro:["Heat brings Officer Reed. Clout brings jackboys. Try that Ghost Mode I gave you — press G. Out of charges? Press T, I'll drop another."],
+        text:function(){ return "Press G to use Beam Up — the ship lifts you out of the heat and sets you down in a quiet hood."; },
+        intro:["Heat brings Officer Reed. Clout brings jackboys. Try that Beam Up I gave you — press G. Out of charges? Press T, I'll drop another."],
         outro:["Invisible. Handy. Don't live in it."],
         done:function(){ return !!S.achievements.ghost; },
         guide:function(){ return null; } },
@@ -3033,8 +3034,8 @@
     }
     function startDriveby(opt){
       driveby = { state:"warn", t:0, x:0, y:ST_AVENUE_Y + 26, targetX:0, fired:false, init:false, parked:false, wait:0, crew:(opt && opt.crew) || null, shots:[], volley:0, vT:0, v:0, dirX:1, retal:(opt && opt.retal) || null, esc:(opt && opt.esc) || 0 };
-      toast(opt && opt.crew ? (opt.crew + " ARE BACK FOR YOU — a dark car is rolling slow. Doorstep, Ghost Mode, or get off the avenue — NOW!") : "A DARK CAR IS ROLLING SLOW — doorstep, Ghost Mode, or get off the avenue — NOW!", true);
-      log("Drive-by incoming on the avenue. Doorsteps are safe — or vanish with Ghost Mode.", "bad");
+      toast(opt && opt.crew ? (opt.crew + " ARE BACK FOR YOU — a dark car is rolling slow. Doorstep, Beam Up, or get off the avenue — NOW!") : "A DARK CAR IS ROLLING SLOW — doorstep, Beam Up, or get off the avenue — NOW!", true);
+      log("Drive-by incoming on the avenue. Doorsteps are safe — or vanish with Beam Up.", "bad");
       sndAlert();
     }
     /* ---------------- WEST SIDE HOOK UP — the tow truck ----------------
@@ -3060,7 +3061,10 @@
       var sx = S.carPos.x > WORLD_W / 2 ? -1 : 1;
       var corner = EXIT_CORNERS.slice().sort(function(a, b){ return dist(a.x, a.y, S.carPos.x, S.carPos.y) - dist(b.x, b.y, S.carPos.x, S.carPos.y); })[0];
       var entry = nearestRoadPoint(corner.x, corner.y), hook = nearestRoadPoint(S.carPos.x, S.carPos.y);
-      tow = { phase:0, t:0, hood:S.district, x:entry.x, y:entry.y, dir:0, hx:1, hy:0, entry:entry, hook:hook, drop:null, route:towRoute(entry, hook) };
+      var tRoute = towRoute(entry, hook);
+      // the truck drives PAST the car and stops 150px ahead of it: the car is hooked from behind and trails the truck, so the two never share the same spot
+      (function(){ var n = tRoute.length, b2 = tRoute[n - 1], a2 = n > 1 ? tRoute[n - 2] : entry, dx = b2.x - a2.x, dy = b2.y - a2.y, dl = Math.sqrt(dx * dx + dy * dy) || 1, ahead = nearestRoadPoint(b2.x + dx / dl * 150, b2.y + dy / dl * 150); if (dist(ahead.x, ahead.y, b2.x, b2.y) > 90) tRoute.push({ x:ahead.x, y:ahead.y }); })();
+      tow = { phase:0, t:0, hood:S.district, x:entry.x, y:entry.y, dir:0, hx:1, hy:0, entry:entry, hook:hook, drop:null, route:tRoute };
       toast("WEST SIDE HOOK UP — truck's rolling for your " + carById(S.car).name + ". " + money(feeNow) + ".");
       log("Called West Side Hook Up: " + money(feeNow) + " to tow your " + carById(S.car).name + " to you.", "good");
       sndGood(); updateHUD();
@@ -3096,17 +3100,42 @@
           w.route = towRoute({ x:w.x, y:w.y }, w.dropRoad); w.phase = 2; w.t = 0;
         }
       } else if (w.phase === 2){
+        if (!w.trail){   // hooked up: the car sits 140px BEHIND the truck and then follows the exact path the truck drove, so the two can never overlap
+          w.trail = [{ x:S.carPos.x, y:S.carPos.y }, { x:w.x, y:w.y }];   // the car starts exactly where it was parked
+        }
         var arrived = towFollow(w, 640, dt);
-        var cp = nearestRoadPoint(w.x - w.hx * 125, w.y - w.hy * 125);
-        S.carPos = { x:Math.round(cp.x), y:Math.round(cp.y) }; S.carDir = w.dir;
-        if (arrived || w.t > 40){ w.phase = 3; w.t = 0; S.carPos = { x:w.drop.x, y:w.drop.y }; S.carDir = w.drop.dir; carRoll = null; toast("West Side Hook Up dropped your " + carById(S.car).name + " at the curb."); sndGood(); }
+        var lastT = w.trail[w.trail.length - 1]; if (Math.hypot(lastT.x - w.x, lastT.y - w.y) >= 6) w.trail.push({ x:w.x, y:w.y });
+        var need = 140, accum = 0, px0 = w.x, py0 = w.y, cpos = null;
+        for (var ti = w.trail.length - 1; ti >= 0; ti--){ var tp = w.trail[ti], seg = Math.hypot(px0 - tp.x, py0 - tp.y); if (accum + seg >= need){ var fr = (need - accum) / (seg || 1); cpos = { x:px0 + (tp.x - px0) * fr, y:py0 + (tp.y - py0) * fr }; break; } accum += seg; px0 = tp.x; py0 = tp.y; }
+        if (!cpos) cpos = w.trail[0];
+        // hard rule: the towed car is never closer than 118px to the truck (tight corners used to fold the trail back on itself)
+        var cdx = cpos.x - w.x, cdy = cpos.y - w.y, cdd = Math.sqrt(cdx * cdx + cdy * cdy);
+        if (cdd < 118){ if (cdd > 0.5){ cpos = { x:w.x + cdx / cdd * 118, y:w.y + cdy / cdd * 118 }; } else { cpos = { x:w.x - (w.hx || 1) * 118, y:w.y - (w.hy || 0) * 118 }; } }
+        S.carPos = { x:Math.round(cpos.x), y:Math.round(cpos.y) }; S.carDir = w.dir;
+        if (arrived || w.t > 40){ w.phase = 3; w.t = 0; var curCar = { x:S.carPos.x, y:S.carPos.y }; if (Math.hypot(w.drop.x - w.x, w.drop.y - w.y) < 125) w.drop = { x:curCar.x, y:curCar.y, dir:w.dir };   // curb spot too close to the truck: leave the car where it trails
+        S.carPos = { x:w.drop.x, y:w.drop.y }; S.carDir = w.drop.dir; carRoll = { fx:curCar.x, fy:curCar.y, t0:performance.now() }; toast("West Side Hook Up dropped your " + carById(S.car).name + " at the curb."); sndGood(); }
       } else if (w.phase === 3){
-        if (w.t > 0.8){ w.phase = 4; w.t = 0; w.route = towRoute({ x:w.x, y:w.y }, w.entry); }
+        if (w.t > 0.2){ w.phase = 4; w.t = 0; w.route = towRoute({ x:w.x, y:w.y }, w.entry); }
       } else {
         /* the sign on the roof is an in-game ad: after the drop the truck cruises slowly while it is on screen so you can read it, then speeds up once it is out of view */
         var onScreen = typeof camView !== "undefined" && camView && w.x > camView.x - 80 && w.x < camView.x + camView.w + 80 && w.y > camView.y - 80 && w.y < camView.y + camView.h + 80;
-        if (towFollow(w, onScreen ? 110 : 900, dt) || w.t > 120){ tow = null; }
+        if (towFollow(w, w.t < 2.2 ? 330 : (onScreen ? 110 : 900), dt) || w.t > 120){ tow = null; }   // pull away fast first so the truck clears the dropped car, then cruise
       }
+    }
+    /* YOUR CAR must never blend in: a pulsing gold ring, an underglow and a floating tag — parked or rolling */
+    function drawYourCarMarker(x, y, driving){
+      var t = performance.now() / 1000, pul = 0.5 + 0.5 * Math.sin(t * 3.2);
+      ctx.save();
+      ctx.globalAlpha = 0.35 + 0.25 * pul; ctx.fillStyle = "#ffd23f"; ctx.beginPath(); ctx.ellipse(x, y + 18, 78 + 6 * pul, 34 + 3 * pul, 0, 0, Math.PI * 2); ctx.fill();
+      ctx.globalAlpha = 0.9; ctx.strokeStyle = "#ffd23f"; ctx.lineWidth = 4; ctx.beginPath(); ctx.ellipse(x, y + 18, 78 + 6 * pul, 34 + 3 * pul, 0, 0, Math.PI * 2); ctx.stroke();
+      ctx.strokeStyle = "#14161d"; ctx.lineWidth = 1.6; ctx.beginPath(); ctx.ellipse(x, y + 18, 82 + 6 * pul, 37 + 3 * pul, 0, 0, Math.PI * 2); ctx.stroke();
+      if (!driving){
+        var by = y - 78 + Math.sin(t * 4) * 4;
+        ctx.globalAlpha = 1; ctx.fillStyle = "#14161d"; ctx.strokeStyle = "#ffd23f"; ctx.lineWidth = 2.5; rr(x - 44, by - 13, 88, 22, 8); ctx.fill(); ctx.stroke();
+        ctx.fillStyle = "#ffd23f"; ctx.font = "900 12px Nunito, sans-serif"; ctx.textAlign = "center"; ctx.textBaseline = "middle"; ctx.fillText("▼ YOUR CAR", x, by - 1);
+        ctx.textBaseline = "alphabetic";
+      }
+      ctx.restore();
     }
     function drawTow(list){
       var w = tow; if (!w) return;
@@ -3136,7 +3165,7 @@
         if (!d.parked){
           if (Math.abs(d.parkX == null ? 1e9 : d.parkX - d.x) > 360 || d.parkX == null) d.parkX = player.x - d.dirX * 130;   // keeps tracking you until it's close, then commits
           var rem = (d.parkX - d.x) * d.dirX;
-          if (rem <= 4){ d.parked = true; d.v = 0; toast((d.crew ? d.crew + " — " : "") + "the car just parked. WINDOW'S DOWN — doorstep, Ghost Mode, or DUCK (B)!", true); sndAlert(); }
+          if (rem <= 4){ d.parked = true; d.v = 0; toast((d.crew ? d.crew + " — " : "") + "the car just parked. WINDOW'S DOWN — doorstep, Beam Up, or DUCK (B)!", true); sndAlert(); }
           else { d.v = Math.min(560, 90 + rem * 2.2); d.x += d.dirX * d.v * dt; }
         }
         if (!d.fired && d.parked && d.t > DB_AIM_T - 0.9 && bHeld && !d.bPrev) d.ducked = true;   // the duck window: the last 0.9 s before the first shot
@@ -3257,8 +3286,8 @@
         done:function(){ return S.district === "avondale" && dist(player.x, player.y, boss.x, boss.y) < 150; },
         guide:function(){ if (S.district !== "avondale") return { x:TRANSIT.x, y:TRANSIT.y, text:"STORY: ride to Avondale" }; return { x:boss.x, y:boss.y, text:"STORY: find Ace's people on the corner" }; } },
       { id:"a3_driveby", title:"Shots on the Avenue", cash:0, clout:0, who:"BIG LOU",
-        text:function(){ return "Head home to DTW. Lou says your block is hot — stay near doorsteps, and keep Ghost Mode ready."; },
-        intro:["Somebody's coming for the Table's people. Get back to DTW. Stay close to doors — and keep that Ghost Mode handy."],
+        text:function(){ return "Head home to DTW. Lou says your block is hot — stay near doorsteps, and keep Beam Up ready."; },
+        intro:["Somebody's coming for the Table's people. Get back to DTW. Stay close to doors — and keep that Beam Up handy."],
         outro:function(){ var h = storyState().choices.dbHit;
           return h ? ["THE BLOCK§A dark car rolled the avenue and fired from the window. " + (h >= 2 ? "You were murked in the lane — people swear you flatlined." : "You went down.") + " An ambulance hauled you up the hill, and the block won't let the story go."]
                    : ["THE BLOCK§A dark car rolled the avenue and fired. By the time the glass hit the ground, you were gone. People are already telling it bigger than it was."]; },
@@ -3418,7 +3447,7 @@
           { label:"Take Vail's deal", sub: haveVail ? "Testify and walk away clean. +$500, heat wiped, a lawyer for life, −10 clout." : "LOCKED — needs a line to DA Vail (you took her card or became her informant).", disabled: !haveVail,
             run:function(){ finishEnding("clean"); } },
           { label:"Burn it all down", sub:"Leak the ledger to the whole city. +$1,000, heat +30. Nobody rules. Everybody remembers.", run:function(){ finishEnding("scorched"); } },
-          { label:"Leave with Trvp", sub:"Take the ship. +$300 and a Ghost charge. The city never sees you again.", run:function(){ finishEnding("orbit"); } }
+          { label:"Leave with Trvp", sub:"Take the ship. +$300 and a Beam Up charge. The city never sees you again.", run:function(){ finishEnding("orbit"); } }
         ], "Pick how it ends — locked options show what they need. ↑↓ + A");
       }, "THE TABLE");
     }
@@ -3728,7 +3757,7 @@
       { id:"runner", name:"Kingpin's Runner" },
       { id:"rich",   name:"Four Figures" },
       { id:"close",  name:"Close Encounters" },
-      { id:"ghost",  name:"Ghost Protocol" },
+      { id:"ghost",  name:"Beam Me Up" },
       { id:"flip",   name:"Cross-Town Flip" },
       { id:"weight", name:"Full Pockets" },
       { id:"lick",   name:"First Lick" },
@@ -3932,13 +3961,13 @@
       clockVal.textContent = fmtClock(S.minutes);
       // Trvp power buttons
       var pwBits = [];
-      if (S.ghostTime > 0) pwBits.push("GHOST " + Math.ceil(S.ghostTime) + "s"); else if (S.ghostCd > 0) pwBits.push("GHOST CD " + Math.ceil(S.ghostCd) + "s");
+      if (beamUp) pwBits.push("BEAMING UP…"); else if (S.ghostCd > 0) pwBits.push("BEAM UP CD " + Math.ceil(S.ghostCd) + "s");
       if (S.doubleT > 0) pwBits.push("2× DEALS " + Math.ceil(S.doubleT) + "s");
       if (S.magnetT > 0) pwBits.push("MAGNET " + Math.ceil(S.magnetT) + "s");
       if (S.boostT > 0) pwBits.push("BOOST " + Math.ceil(S.boostT) + "s");
       if (S.topDeals > 0) pwBits.push("TOP ×" + S.topDeals);
       ghostStateEl.textContent = pwBits.length ? pwBits.join(" · ") : (S.power ? POWERS[S.power].name + " — G" : "none held");
-      ghostBtnEl.classList.toggle("active", S.ghostTime > 0 || S.doubleT > 0 || S.magnetT > 0 || S.boostT > 0);
+      ghostBtnEl.classList.toggle("active", !!beamUp || S.doubleT > 0 || S.magnetT > 0 || S.boostT > 0);
       callStateEl.textContent = S.ship ? "inbound" : (S.trvpCd > 0 ? Math.ceil(S.trvpCd) + "s" : "ready");
       callBtnEl.classList.toggle("cooling", !S.ship && S.trvpCd > 0);
       // pockets + district + tier + crew — capacity is read at a glance:
@@ -4330,7 +4359,8 @@
       { cost:400, pct:0.22, stars:99, grace:600 }
     ];
     // the fold is a floor or a slice of the cash you're carrying: a fat wallet pays fat
-    var BRIBE_TIERS = BRIBE_BASE.map(function(b){ return { base:b.cost, pct:b.pct, stars:b.stars, grace:b.grace, get cost(){ return cashFee(b.cost, b.pct, 20000); } }; });
+    var BRIBE_TIERS = BRIBE_BASE.map(function(b){ return { base:b.cost, pct:b.pct, stars:b.stars, grace:b.grace, get cost(){ return Math.min(20000, Math.max(b.cost, Math.round(funds() * b.pct / 5) * 5)); } }; });
+    function bribeSummary(){ return BRIBE_TIERS.map(function(bt){ return money(bt.cost) + ": " + (bt.stars >= 99 ? "ALL stars" : bt.stars + (bt.stars === 1 ? " star" : " stars")) + " + " + Math.round(bt.grace / 60) + " min grace"; }).join(" · "); }
     function bribeTierLabel(bt){
       return "Clear " + (bt.stars >= 99 ? "ALL stars" : bt.stars + (bt.stars === 1 ? " star" : " stars")) + " + " + Math.round(bt.grace / 60) + " min grace — no stops while it runs";
     }
@@ -4432,7 +4462,7 @@
       return opts;
     }
 
-    /* ---------------- Trvp: alien guide, dialogue & Ghost Mode ---------------- */
+    /* ---------------- Trvp: alien guide, dialogue & Beam Up ---------------- */
     var dialogue = null;
 
     var dnameEl = document.querySelector("#dialogue .dname");
@@ -4496,7 +4526,7 @@
       "A kingpin's package runs pay $120 flat. Just don't be late — they count seconds like money.",
       "Apartment first, car second. A door you can lock beats a whip you can't hide.",
       "Heat past 55 and Reed stops patrolling and starts hunting. Cool off before that.",
-      "Jackboy on you? Doorsteps are safe ground. Or pop Ghost Mode and let him chase air.",
+      "Jackboy on you? Doorsteps are safe ground. Or use Beam Up and let him chase air.",
       "Starlight pays best over the water — Covington, Kentucky side. But Reed watches that bridge when you're hot: heat 30+, you cross with 10 units or less.",
       "Thirteen hoods, thirteen prices. Fizz is cheap on the West Side, Velvet runs MTA and Walnut Hills, and Campus money pays stupid for Starlight.",
       "Bond Hill runs quiet and green — Static pays off Reading Rd. Evanston spends Xavier money on Moon Candy. Madisonville pays gallery money for Glitter.",
@@ -4661,18 +4691,65 @@
       award("close");
     }
 
+    /* BEAM UP: the ship lifts you out (no arrest, no jack, no shots while the beam has you), the chase and your wanted level are wiped,
+       and you're set down in the quietest other hood. */
+    var beamUp = null;
+    function safestHood(){
+      var best = null, bs = 99;
+      DISTRICTS.forEach(function(d){ if (d.id === S.district) return; var sc = d.heat * d.jack + Math.random() * 0.12; if (sc < bs){ bs = sc; best = d; } });
+      return best || districtById("dtw");
+    }
+    function startBeamUp(){
+      var d = safestHood();
+      beamUp = { t:0, phase:"up", dest:d.id, x:player.x, y:player.y };
+      S.ghostCd = GHOST_COOLDOWN; S.ghostTime = 20; award("ghost");
+      // the chase is over the moment the beam grabs you
+      S.heat = 0; S.chaseLeft = 0; S.escapeT = 0; cop.mode = "patrol"; try { cruiserStand(); } catch(e){}
+      driveby = null; jackGone(90); setNpcCd("cop", 90); S.threatCd = Math.max(S.threatCd || 0, 90);
+      S.driving = false; player.vx = 0; player.vy = 0;
+      toast("BEAM UP — the ship has you. Cops and jackboys can't touch you. Setting you down in " + d.nick + ".");
+      log("Beamed up out of the heat. Wanted level wiped, chase over. Recharge: " + Math.round(GHOST_COOLDOWN / 60) + " min.", "good");
+      sndGhost(); updateHUD();
+    }
+    function updateBeamUp(dt){
+      if (!beamUp) return;
+      var B = beamUp; B.t += dt; S.ghostTime = Math.max(S.ghostTime, 2); player.vx = 0; player.vy = 0;
+      if (B.phase === "up" && B.t >= 2.4){
+        B.phase = "down"; B.t = 0;
+        var d = districtById(B.dest), left = curDistrict().nick;
+        S.district = d.id; S.minutes += 15; ensurePrices(d.id); applyHoodLayout(); closeMenu();
+        player.x = TRANSIT.x + rand(-26, 26); player.y = TRANSIT.y + 160; player.vx = 0; player.vy = 0;
+        try { ejectFromSolids(player); } catch(e){}
+        camPos.x = null; S.driving = false;
+        if (S.car){ var cp = nearestPullSpot(player.x, player.y, 900); S.carPos = cp ? { x:cp.x, y:cp.y } : { x:Math.round(player.x + 80), y:Math.round(player.y + 70) }; if (cp) S.carDir = cp.dir; }
+        placeEnforcers(); S.packs = []; S.packTimer = rand(18, 30) * homePackMult(); spawnLicks();
+        B.x = player.x; B.y = player.y;
+        dailyProg("visit", 1, d.id);
+        toast("Touchdown in " + d.nick + " — a quiet corner. Nobody saw you leave " + left + ".");
+        sndGood();
+      } else if (B.phase === "down" && B.t >= 1.5){
+        beamUp = null; S.ghostTime = 0; S.threatCd = Math.max(S.threatCd || 0, 60);
+        updateHUD();
+      }
+    }
+    function beamLift(){ if (!beamUp) return 0; return beamUp.phase === "up" ? clamp(beamUp.t / 2.4, 0, 1) : 1 - clamp(beamUp.t / 1.5, 0, 1); }
+    function drawBeamUpShip(){
+      if (!beamUp) return;
+      var keep = S.ship, keepB = S.beamTrvp, L = beamLift(), px = player.x, py = player.y;
+      S.ship = { x:px, y:py - 190, phase:"wait", t:0 }; S.beamTrvp = { x:px, y:py, alpha:1 };
+      try { drawShip(); } catch(e){}
+      S.ship = keep; S.beamTrvp = keepB;
+    }
+
     /* G spends whatever Trvp dropped you — every power bends the loop */
     var GHOST_SECS = 30, GHOST_COOLDOWN = 270;   // 30s of ghost, then 4.5 min from the moment you pop it before it can be used (or dropped) again
     function activateGhost(){
       if (!S.power){ toast("No power-up held. Call Trvp (T) — the ship drops one."); sndBad(); return; }
-      if (S.power === "ghost" && (S.ghostCd || 0) > 0 && !(S.ghostTime > 0)){ toast("Ghost Mode is recharging — " + Math.ceil(S.ghostCd) + "s. It only works every so often."); sndBad(); return; }
+      if (beamUp){ return; }
+      if (S.power === "ghost" && (S.ghostCd || 0) > 0){ toast("Beam Up is recharging — " + Math.ceil(S.ghostCd) + "s. The ship only comes around every so often."); sndBad(); return; }
       var p = S.power; S.power = null;
       if (p === "ghost"){
-        S.ghostTime = GHOST_SECS; S.ghostCd = GHOST_COOLDOWN; award("ghost");
-        toast("GHOST MODE — invisible for " + GHOST_SECS + " seconds. Cops, jackboys, drive-bys and ambushes can't touch you. Recharge: " + Math.round(GHOST_COOLDOWN / 60) + " min.");
-        log("Ghost Mode on for " + GHOST_SECS + "s. Cops, jackboys, drive-bys and ambushes can't find you.", "good");
-        sndGhost();
-      } else if (p === "double"){
+        startBeamUp();      } else if (p === "double"){
         S.doubleT = 60;
         toast("DOUBLE-UP — every deal pays 2× for 60 seconds. Move!");
         log("Double-Up live: deal money ×2 for 60s.", "good");
@@ -4974,7 +5051,7 @@
         rivals.forEach(function(rv){ if (!((rv.busted || 0) > 0) && (rv.heat || 0) >= 70 && (!hotRv || rv.heat > hotRv.heat)) hotRv = rv; });
         if (hotRv && Math.random() < dt * 0.3){ cop.rivalT = hotRv; log(copName() + "'s onto " + hotRv.name + " — that rival's dealing got too loud to ignore.", ""); }
       }
-      // decide mode (Ghost Mode: Reed simply can't see you) — and after
+      // decide mode (Beam Up: Reed simply can't see you) — and after
       // ANY stop, Reed needs ~12s to reset before he can step to you again
       if (S.ghostTime > 0 || (S.bribeGrace || 0) > 0 || S.holedUp) cop.mode = "patrol";   // ghosted, paid up, or holed up in your own trap: the law can't touch you
       else if (S.heat >= 55 && npcReady("cop") && !S.jackboy && !battleState && S.threatCd <= 0) cop.mode = "chase";
@@ -5065,7 +5142,7 @@
        · Shake the foot crew like Reed: 470+ of distance held 2.5s and
          the whole unit loses you, wanted level wiped. */
     var CRUISER_SPEED = 420;       // NOT faster than normal: a hair under a sprint (435) and well under a stock whip (500)
-    var CRUISER_MIN_CHASE = 75;    // seconds a cruiser hunt lasts before it can lose you (a bribe, Ghost Mode, your trap or a bust still end it at once)
+    var CRUISER_MIN_CHASE = 60;    // seconds a cruiser hunt lasts before it can lose you (a bribe, Beam Up, your trap or a bust still end it at once)
     var OFFICER_NAMES = ["Officer Hale", "Officer Quinn", "Officer Marsh", "Officer Duran", "Officer Pike", "Officer Reyes"];
     function cruiserStand(){ cruiser.active = false; cruiser.crew = []; cruiser.left = 0; cruiser.route = []; cruiser.phase = "off"; cruiser.escT = 0; cruiser.farT = 0; }
     function mkOfficer(x, y, idx){
@@ -5331,7 +5408,7 @@
       toast("Word travels fast — jackboy " + jid.name + " just hit the block looking for you.", true);
       log("Jackboy " + jid.name + " spotted on the block. Don't let him get close.", "bad");
       sndAlert();
-      trvpHint("jack", "Jackboy inbound! Doorsteps are safe — or pop Ghost Mode (G) and vanish.");
+      trvpHint("jack", "Jackboy inbound! Doorsteps are safe — or Beam Up (G) out of there.");
     }
 
     function updateJackboy(dt){
@@ -5345,7 +5422,7 @@
         if (dist(player.x, player.y, buildings[i].door.x, buildings[i].door.y) < 50){ atDoor = true; break; }
       }
       if (S.ghostTime > 0){
-        // Ghost Mode: he can't see you — he wanders the block, confused.
+        // Beam Up: he can't see you — he wanders the block, confused.
         // Roam targets land on open ground (openPoint) and he routes
         // around buildings to reach them — no grinding on walls.
         if (chaseStep(j, j.tx, j.ty, j.speed * 0.45, dt, 30)){
@@ -5473,7 +5550,7 @@
     function resolveGhostOut(){
       activateGhost();
       toast("You vanished mid-sentence. He's swinging at air.");
-      log("Ghosted out of a jackboy confrontation.", "good");
+      log("Beamed out of a jackboy confrontation.", "good");
     }
     function resolveRun(){
       var j = S.jackboy; if (!j) return;
@@ -5504,6 +5581,9 @@
        by the posted enforcers, sometimes dropping the attacker (the ambulance takes him). And the block fights itself: licks and rival dealers beef with each other
        on the street now and then, and sometimes shots go off. */
     var fieldShots = [], npcFight = null, _beefT = 60, _defT = 0;
+    function aimAt(o, tx, ty, ms){ o.aimX = tx; o.aimY = ty; o.aimUntil = performance.now() + (ms || 900); o.face = tx >= o.x ? 1 : -1; }
+    function fireAt(o, t){ aimAt(o, t.x, t.y, 900); o.kick = performance.now() + 120; fieldShot(o.x + (o.face || 1) * 22, o.y - 14, t.x, t.y - 18); try { playSfx("alertSoft"); } catch(e){} }
+    function flinch(o, ms){ o.hitUntil = performance.now() + (ms || 500); }
     function fieldShot(x1, y1, x2, y2){ fieldShots.push({ x1:x1, y1:y1, x2:x2, y2:y2, t:0.3, max:0.3 }); }
     function drawFieldFx(){
       fieldShots.forEach(function(sh){
@@ -5531,7 +5611,7 @@
       tgt._def = true;   // one roll per attacker
       var n = Math.min(3, guards.length);
       if (Math.random() > 0.35 + 0.1 * n){ if (kind === "jack") toast("Your crew's watching the trap — " + (S.jackboy.name || "he") + " is out of their range."); return; }
-      for (var gi = 0; gi < n; gi++){ var g = guards[gi]; (function(g2, d){ setTimeout(function(){ fieldShot(g2.x, g2.y - 20, tgt.x, tgt.y - 18); burst(tgt.x, tgt.y - 12, "#ffd23f", 6, 130); try { playSfx("alertSoft"); } catch(e){} }, d); })(g, gi * 140); }
+      for (var gi = 0; gi < n; gi++){ var g = guards[gi]; (function(g2, d){ setTimeout(function(){ fireAt(g2, tgt); flinch(tgt, 500); burst(tgt.x, tgt.y - 12, "#ffd23f", 6, 130); try { playSfx("alertSoft"); } catch(e){} }, d); })(g, gi * 140); }
       addShake(5, 0.25);
       var sx = tgt.x > WORLD_W / 2 ? 1 : -1;
       if (kind === "jack"){
@@ -5558,15 +5638,27 @@
         } else if (F.phase === 1){
           if (F.t > 0.6){
             var shooter = Math.random() < 0.5 ? F.a : F.b, victim = shooter === F.a ? F.b : F.a, shot = Math.random() < 0.4;   // sometimes it's just a shove and a lot of yelling
-            if (shot){
-              fieldShot(shooter.o.x, shooter.o.y - 20, victim.o.x, victim.o.y - 18); burst(victim.o.x, victim.o.y - 12, "#ffd23f", 6, 130); addShake(4, 0.2);
-              var vn = victim.o.name || "Somebody", look = lookOfNpc(victim.o), vx = victim.o.x, vy = victim.o.y, hrs = rand(6, 16);
-              if (victim.kind === "lick"){ var li = licks.indexOf(victim.o); if (li >= 0) licks.splice(li, 1); } else { victim.o.busted = hrs * 60; }
-              sendAway(vn, "hospital", hrs, shooter.o.name + " shot him", S.district, false);
-              toast(shooter.o.name + " shot " + vn + " — down on the block.", true);
-              try { startOppAmbulance(look, vn, { x:vx, y:vy, sx:(vx > WORLD_W / 2 ? 1 : -1) }, "ambulance"); } catch(e){}
-            } else { toast(F.a.o.name + " and " + F.b.o.name + " squared up, shoved, and walked off.", false); }
+            if (shot){ F.shooter = shooter; F.victim = victim; F.phase = 2; F.t = 0; F.vol = 0; F.volT = 0; aimAt(shooter.o, victim.o.x, victim.o.y, 4000); aimAt(victim.o, shooter.o.x, shooter.o.y, 4000); return; }
+            toast(F.a.o.name + " and " + F.b.o.name + " squared up, shoved, and walked off.", false);
             npcFight = null;
+          }
+        } else if (F.phase === 2){
+          /* a real exchange: both draw, shots go back and forth with muzzle flashes and recoil; the last one lands */
+          F.volT -= dt;
+          A.tx = A.x; A.ty = A.y; B.tx = B.x; B.ty = B.y; A.wait = 0; B.wait = 0; A.wt = 3; B.wt = 3;
+          if (F.volT <= 0){
+            var sh = F.shooter, vi = F.victim, last = F.vol >= 3;
+            if (F.vol % 2 === 0 || last){ fireAt(sh.o, vi.o); if (last) flinch(vi.o, 700); } else { fireAt(vi.o, sh.o); }
+            addShake(3, 0.15); F.vol++; F.volT = 0.38;
+            if (last){
+              burst(vi.o.x, vi.o.y - 12, "#ffd23f", 6, 130); addShake(4, 0.2);
+              var vn = vi.o.name || "Somebody", look = lookOfNpc(vi.o), vx = vi.o.x, vy = vi.o.y, hrs = rand(6, 16);
+              if (vi.kind === "lick"){ var li = licks.indexOf(vi.o); if (li >= 0) licks.splice(li, 1); } else { vi.o.busted = hrs * 60; }
+              sendAway(vn, "hospital", hrs, sh.o.name + " shot him", S.district, false);
+              toast(sh.o.name + " shot " + vn + " — down on the block.", true);
+              try { startOppAmbulance(look, vn, { x:vx, y:vy, sx:(vx > WORLD_W / 2 ? 1 : -1) }, "ambulance"); } catch(e){}
+              sh.o.aimUntil = 0; vi.o.aimUntil = 0; npcFight = null;
+            }
           }
         }
         return;
@@ -6128,6 +6220,7 @@
       if (S.trvpCd > 0) S.trvpCd -= dt;
       if (S.spaceCd > 0) S.spaceCd -= dt;
       if (S.ghostTime > 0) S.ghostTime -= dt;
+      updateBeamUp(dt);
       if (S.ghostCd > 0) S.ghostCd -= dt;
       if (S.escortT > 0){ S.escortT -= dt; if (S.escortT <= 0 || S.escortHood !== S.district){ S.escortT = 0; placeEnforcers(); toast("Your enforcers head back to their posts."); } }
       if (S.bribeGrace > 0) S.bribeGrace -= dt;
@@ -6176,7 +6269,7 @@
       // Stick is true analog: direction is 360°, speed scales with how
       // far you push (dead-zone 0.16 so a resting thumb doesn't drift).
       var mx = 0, my = 0, stickMag = 0;
-      if (!dialogue && !menu){
+      if (!dialogue && !menu && !beamUp){
         if (keys["arrowleft"] || keys["a"]) mx -= 1;
         if (keys["arrowright"] || keys["d"]) mx += 1;
         if (keys["arrowup"] || keys["w"]) my -= 1;
@@ -6375,6 +6468,8 @@
         updateTable(dt);
         updateTrvpPlot(dt);
         updateFieldCombat(dt);
+        updatePlugRun(dt);
+        updateTrvpWatch(dt);
         updateKpHit(dt);
 
         // quest timer
@@ -6569,7 +6664,7 @@
         var bd = 1e9;
         buildings.forEach(function(b){
           var d = dist(player.x, player.y, b.door.x, b.door.y);
-          if (d < bd){ bd = d; t = { x:b.door.x, y:b.door.y, text:(driveby && !S.jackboy ? "DRIVE-BY! Doorstep or Ghost Mode: " : "JACKBOY! Nearest doorstep: ") + b.name }; }
+          if (d < bd){ bd = d; t = { x:b.door.x, y:b.door.y, text:(driveby && !S.jackboy ? "DRIVE-BY! Doorstep or Beam Up: " : "JACKBOY! Nearest doorstep: ") + b.name }; }
         });
       } else {
         t = guideTarget();
@@ -7118,11 +7213,11 @@
     }
     function hudHeatHtml(){
       var st = wantedStars(), grace = S.bribeGrace || 0, h = "";
-      var status = S.ghostTime > 0 ? "GHOST — invisible for " + Math.ceil(S.ghostTime) + "s" : grace > 0 ? "PAID OFF — no stops for " + Math.ceil(grace / 60) + " min" : S.holedUp ? "Laying low in your trap house" : (cop.mode === "chase" ? "THE LAW IS ON YOU" : (S.heat >= 35 ? "Hot — Reed is looking" : S.heat > 0 ? "Warm — keep it quiet" : "Clean"));
+      var status = S.ghostTime > 0 ? "BEAMING UP — nobody can touch you" : grace > 0 ? "PAID OFF — no stops for " + Math.ceil(grace / 60) + " min" : S.holedUp ? "Laying low in your trap house" : (cop.mode === "chase" ? "THE LAW IS ON YOU" : (S.heat >= 35 ? "Hot — Reed is looking" : S.heat > 0 ? "Warm — keep it quiet" : "Clean"));
       h += hudRow("HEAT " + Math.round(S.heat), "★".repeat(st) + "☆".repeat(5 - st), status + ". Heat cools on its own (about 0.7/s) and faster inside your own trap house.");
       h += hudHead("COOL IT DOWN");
       h += hudRow("BRIBE THE LAW", "", "Pay Reed: strip stars and buy a grace period with no stops.", hudBtn("SLIP A BRIBE", "buy", function(){ closeMenu(); openBribeMenu(); }, S.heat <= 0));
-      h += hudRow("ICE / GHOST", "", S.power === "ice" || S.power === "ghost" ? "You're holding " + POWERS[S.power].name + " — use it from PWR." : "Power-ups from Trvp cool or hide you (see PWR).");
+      h += hudRow("ICE / BEAM UP", "", S.power === "ice" || S.power === "ghost" ? "You're holding " + POWERS[S.power].name + " — use it from PWR." : "Power-ups from Trvp cool or hide you (see PWR).");
       h += hudRow("LAWYER", S.lawyer ? "✓" : "", S.lawyer ? "Retained: 15% less heat from everything, free bail." : "Retain one in UPGRADE: 15% less heat and free bail.");
       var beefs = DISTRICTS.filter(function(d){ return beefIn(d.id) >= 8; });
       h += hudHead("BEEF");
@@ -7156,9 +7251,9 @@
       var h = "";
       h += hudRow(S.power ? "HOLDING: " + POWERS[S.power].name : "NOTHING HELD", "", S.power ? POWERS[S.power].desc : "Call Trvp from the CALL menu — he brings one power-up at a time.", S.power ? hudBtn("USE IT (G)", "buy", hudDo(function(){ activateGhost(); }), S.power === "ghost" && S.ghostCd > 0) : "");
       var live = [];
-      if (S.ghostTime > 0) live.push("Ghost " + Math.ceil(S.ghostTime) + "s"); if (S.doubleT > 0) live.push("Double-up " + Math.ceil(S.doubleT) + "s"); if (S.magnetT > 0) live.push("Lick magnet " + Math.ceil(S.magnetT) + "s"); if (S.topDeals > 0) live.push("Top price ×" + S.topDeals); if (S.boostT > 0) live.push("Empire boost " + Math.ceil(S.boostT) + "s");
+      if (S.ghostTime > 0) live.push("Beam Up"); if (S.doubleT > 0) live.push("Double-up " + Math.ceil(S.doubleT) + "s"); if (S.magnetT > 0) live.push("Lick magnet " + Math.ceil(S.magnetT) + "s"); if (S.topDeals > 0) live.push("Top price ×" + S.topDeals); if (S.boostT > 0) live.push("Empire boost " + Math.ceil(S.boostT) + "s");
       h += hudRow("ACTIVE NOW", "", live.length ? live.join(" · ") : "Nothing running.");
-      h += hudRow("GHOST COOLDOWN", "", S.ghostCd > 0 ? "Ghost can be used again in " + Math.ceil(S.ghostCd) + "s." : "Ghost is ready whenever Trvp drops it.");
+      h += hudRow("BEAM UP COOLDOWN", "", S.ghostCd > 0 ? "Beam Up can be used again in " + Math.ceil(S.ghostCd) + "s." : "Beam Up is ready whenever Trvp drops it.");
       h += hudHead("THE POWER-UPS");
       for (var k in POWERS) h += hudRow(POWERS[k].name, "", POWERS[k].desc);
       return h;
@@ -7195,13 +7290,167 @@
     }
     function plugDrop(gid){
       if (!plugStatus()){ toast("The plug only takes a Kingpin's calls.", true); sndBad(); return; }
+      if (plugRun || (plugVan && plugVan.active)){ toast("The plug's runner is already on the way."); sndBad(); return; }
       if (cd("plugdrop") > 0){ toast("The plug is making another run — about " + Math.ceil(cd("plugdrop")) + "s."); sndBad(); return; }
       var g = gid ? goodById(gid) : plugBestGood(), price = plugPrice(g), room = Math.max(0, invCap() - invCount()), n = Math.min(room, Math.floor(funds() / price));
       if (n <= 0){ toast(room <= 0 ? "Your pockets are full — sell some weight first." : "Short — one " + g.name + " is " + money(price) + " from the plug."); sndBad(); return; }
-      payFunds(n * price); S.inv[g.id] = (S.inv[g.id] || 0) + n; S.invFrom[g.id] = "plug";
-      setCd("plugdrop", 90);
-      toast("THE PLUG FLOODS YOU — " + n.toLocaleString("en-US") + " × " + g.name + " for " + money(n * price) + " (" + money(price) + "/ea, best price in the city).");
-      log("The plug dropped " + n + " × " + g.name + " (" + money(n * price) + ").", "good"); sndCash(); updateHUD();
+      setCd("plugdrop", 360);
+      var spot = pickPark(), corner = EXIT_CORNERS.slice().sort(function(a, b){ return dist(a.x, a.y, spot.x, spot.y) - dist(b.x, b.y, spot.x, spot.y); })[0], entry = nearestRoadPoint(corner.x, corner.y);
+      plugRun = { phase:"drive", t:0, hood:S.district, gid:g.id, n:n, price:price, spot:spot, entry:entry, rob:Math.random() < 0.3,
+                  car:{ x:entry.x, y:entry.y, dir:0, hx:1, hy:0, route:towRoute(entry, spot.road) }, man:null, total:0 };
+      toast("THE PLUG IS SENDING A RUNNER — a car is pulling up near you with " + n.toLocaleString("en-US") + " × " + g.name + " (" + money(n * price) + "). Be somewhere safe: not every pickup goes clean.");
+      log("Called the plug: runner on the way with " + n + " × " + g.name + ".", "good"); sndGood(); updateHUD();
+    }
+    /* ---- the plug's runner: a car parks at the curb near you, the driver walks up and hands you the bag. 30% of the time the plug's lane is watched: a
+       black van pulls up with three jackboys right after you take the package, and it plays like a police car chase (60s). Caught = you lose the
+       work, get put in the hospital, and the plug won't run again for 6 minutes. ---- */
+    var plugRun = null, plugVan = null, JACK_LOOKS = [
+      { skin:"#8d5524", hair:"#101014", accent:"#e63946", shirt:"#16161d", pants:"#23232e", shoes:"#0b0b0f" },
+      { skin:"#c68642", hair:"#2a1b12", accent:"#e63946", shirt:"#2a1d18", pants:"#16161d", shoes:"#0b0b0f" },
+      { skin:"#6b4423", hair:"#101014", accent:"#ffd23f", shirt:"#1d1d2b", pants:"#23232e", shoes:"#0b0b0f" } ];
+    function mkPerson(x, y, look, name, role){ var p = { x:x, y:y, r:16, walk:0, face:1, moving:false, name:name, role:role }; for (var k in look) p[k] = look[k]; return p; }
+    function plugRunFinish(){ plugRun = null; }
+    function updatePlugRun(dt){
+      if (!S || !S.username || S.over) return;
+      var R = plugRun;
+      if (R){
+        if (R.hood !== S.district){ plugRun = null; }
+        else if (!(battleState || dialogue || menu || rescue)){
+          R.t += dt; R.total += dt;
+          var car = R.car;
+          if (R.total > 140 && R.phase !== "leave"){ R.phase = "leave"; R.t = 0; car.route = towRoute(car, R.entry); if (!R.handed){ toast("The plug's runner got spooked and rolled off. No charge."); } }
+          if (R.phase === "drive"){
+            if (towFollow(car, 520, dt)){ car.x = R.spot.x; car.y = R.spot.y; car.dir = R.spot.dir || 0; R.phase = "park"; R.t = 0; }
+          } else if (R.phase === "park"){
+            if (R.t > 0.7){ R.man = mkPerson(car.x + 40, car.y + 30, { skin:"#c68642", hair:"#101014", accent:"#5eead4", shirt:"#2c4a73", pants:"#17171f", shoes:"#14161d" }, "PLUG'S RUNNER", "runner"); R.phase = "walk"; R.t = 0; toast("The runner's out of the car — he's coming to you with the bag."); }
+          } else if (R.phase === "walk"){
+            var m = R.man;
+            if (chaseStep(m, player.x, player.y, 165, dt, 44) || R.t > 45){ R.phase = "hand"; R.t = 0; }
+            m.walk += dt * 6;
+          } else if (R.phase === "hand"){
+            if (R.t > 1.0 && !R.handed){
+              R.handed = true;
+              var g = goodById(R.gid), room = Math.max(0, invCap() - invCount()), n = Math.min(R.n, room, Math.floor(funds() / R.price));
+              if (n > 0){
+                payFunds(n * R.price); S.inv[g.id] = (S.inv[g.id] || 0) + n; S.invFrom[g.id] = "plug"; R.got = n;
+                toast("THE PLUG DELIVERS — " + n.toLocaleString("en-US") + " × " + g.name + " for " + money(n * R.price) + " (" + money(R.price) + "/ea, best price in the city).");
+                log("The plug's runner handed over " + n + " × " + g.name + " (" + money(n * R.price) + ").", "good"); sndCash();
+              } else { toast("The runner waited — you couldn't take the bag. No charge."); R.rob = false; }
+              updateHUD();
+            }
+            if (R.t > 1.8){
+              R.phase = "back"; R.t = 0;
+              if (R.rob && R.got){ R.vanIn = rand(3, 5); }
+            }
+          } else if (R.phase === "back"){
+            var m2 = R.man, d2 = chaseStep(m2, car.x, car.y, 175, dt, 18); m2.walk += dt * 6;
+            if (R.vanIn > 0){ R.vanIn -= dt; if (R.vanIn <= 0) startPlugVan(R); }
+            if (d2 || R.t > 8){ R.man = null; R.phase = "leave"; R.t = 0; car.route = towRoute(car, R.entry); }
+          } else if (R.phase === "leave"){
+            if (R.vanIn > 0){ R.vanIn -= dt; if (R.vanIn <= 0) startPlugVan(R); }
+            var onScr = typeof camView !== "undefined" && camView && car.x > camView.x - 80 && car.x < camView.x + camView.w + 80 && car.y > camView.y - 80 && car.y < camView.y + camView.h + 80;
+            if (towFollow(car, R.t < 1.5 ? 300 : (onScr ? 220 : 800), dt) || R.t > 90){ plugRun = null; }
+          }
+        }
+      }
+      updatePlugVan(dt);
+    }
+    function startPlugVan(R){
+      if (plugVan && plugVan.active) return;
+      R.vanIn = 0;
+      var corners = [{x:80,y:80},{x:WORLD_W - 80,y:80},{x:80,y:WORLD_H - 80},{x:WORLD_W - 80,y:WORLD_H - 80}], cc = corners[randi(0, 3)], en = nearestRoadPoint(cc.x, cc.y);
+      plugVan = { active:true, hood:S.district, gid:R.gid, got:R.got, x:en.x, y:en.y, dir:0, hx:1, hy:0, route:[], phase:"arrive", park:null, t:0, chaseT:0, planT:0, crew:[], exited:0, escT:0, farT:0, walk:0 };
+      toast("BLACK VAN — three jackboys just clocked the drop. It's rolling for you. Get somewhere safe or get in your whip!", true);
+      log("A black van with three jackboys is hunting you for the package.", "bad"); sndAlert();
+      S.threatCd = Math.max(S.threatCd || 0, 80);
+    }
+    function plugVanEnd(why, lost){
+      var V = plugVan; plugVan = null; if (!V) return;
+      if (lost){
+        var g = goodById(V.gid), have = S.inv[g.id] || 0, took = Math.min(have, V.got || have);
+        S.inv[g.id] = have - took; if (S.inv[g.id] <= 0) S.invFrom[g.id] = null;
+        setCd("plugdrop", 360); setNpcCd("jackboy", 60); S.jackCooldown = Math.max(S.jackCooldown || 0, 60);
+        toast("THE JACKBOYS GOT YOU — they took the " + took + " × " + g.name + " and left you in the street. The plug won't run again for 6 minutes.", true);
+        log("Jacked for the plug's package (" + took + " × " + g.name + ").", "bad");
+        addClout(-2, "got jacked for the plug's package");
+        updateHUD(); sendToHospital("beat", 0);
+      } else if (why){ toast(why); updateHUD(); }
+    }
+    function updatePlugVan(dt){
+      var V = plugVan; if (!V || !V.active) return;
+      if (V.hood !== S.district || S.holedUp || S.ghostTime > 0){ plugVan = null; return; }
+      if (battleState || dialogue || menu || rescue) return;
+      V.chaseT += dt; V.planT -= dt;
+      var locked = V.chaseT < CRUISER_MIN_CHASE, vcr = { x:V.x, y:V.y, route:V.route, dir:V.dir, hx:V.hx, hy:V.hy };
+      function drive(sp){ var px = V.x, py = V.y, done = towFollow(V, sp, dt), dd = dist(px, py, V.x, V.y), lim = sp * dt * 1.01; if (dd > lim){ V.x = px + (V.x - px) * lim / dd; V.y = py + (V.y - py) * lim / dd; } return done; }
+      if (V.phase === "leave"){
+        if (!V.route.length) V.route = towRoute(V, nearestRoadPoint(EXIT_CORNERS[0].x, EXIT_CORNERS[0].y));
+        if (drive(380) || V.chaseT > 400){ plugVan = null; }
+        return;
+      }
+      if (!locked && V.chaseT > 60 && V.crewAllIdle){ }
+      if (S.driving){
+        if (V.crew.length){
+          var allIn = true;
+          V.crew.forEach(function(o){ chaseStep(o, V.x, V.y, 305, dt, 12); o.walk += dt * 10; if (dist(o.x, o.y, V.x, V.y) > 34) allIn = false; });
+          if (allIn){ V.crew = []; V.route = []; V.phase = "chase"; }
+          return;
+        }
+        V.phase = "chase";
+        if (V.planT <= 0 || !V.route.length){ V.route = towRoute(V, nearestRoadPoint(player.x, player.y)); V.planT = 1.0; }
+        drive(CRUISER_SPEED);
+        if (dist(V.x, V.y, player.x, player.y) < 72 && S.battleCd <= 0){ plugVanEnd("", true); return; }
+        if (dist(V.x, V.y, player.x, player.y) > 1100){ V.farT += dt; if (V.farT >= 6 && !locked){ plugVanLost(); return; } } else V.farT = 0;
+        if (V.chaseT > CRUISER_MIN_CHASE + 25){ plugVanLost(); }
+        return;
+      }
+      if (V.phase === "chase"){ V.phase = "arrive"; V.park = null; }
+      if (V.phase === "arrive"){
+        if (!V.park || (V.planT <= 0 && dist(player.x, player.y, V.park.x, V.park.y) > 500)){ V.park = pickPark(); V.route = towRoute(V, V.park.road); }
+        if (V.planT <= 0) V.planT = 2;
+        if (drive(CRUISER_SPEED)){ V.x = V.park.x; V.y = V.park.y; V.dir = V.park.dir || 0; V.phase = "parked"; V.t = 0; V.exited = 0; toast("THE VAN PARKED — three jackboys are getting out!", true); sndAlert(); }
+        return;
+      }
+      V.t += dt;
+      if (V.exited < 3 && V.t >= 0.5 + V.exited * 0.6){
+        var side = V.exited % 2 ? 42 : -42, o = mkPerson(V.x + side, V.y + 30, JACK_LOOKS[V.exited], "JACKBOY", "jackboy"); o.flank = [0, -1, 1][V.exited];
+        V.crew.push(o); V.exited++;
+      }
+      var nearest = 1e18, caught = false;
+      V.crew.forEach(function(o){
+        var d = dist(o.x, o.y, player.x, player.y), tx = player.x, ty = player.y;
+        if (o.flank && d > 240){ var ux = (player.x - o.x) / d, uy = (player.y - o.y) / d; tx = clamp(player.x - uy * o.flank * 240, 40, WORLD_W - 40); ty = clamp(player.y + ux * o.flank * 240, 40, WORLD_H - 40); }
+        chaseStep(o, tx, ty, 195, dt, 6);
+        if (d < nearest) nearest = d; if (d < 34) caught = true;
+      });
+      if (caught && S.battleCd <= 0){ plugVanEnd("", true); return; }
+      if (V.crew.length && nearest > 470){ V.escT += dt; if (V.escT >= 2.5 && !locked){ plugVanLost(); return; } } else V.escT = 0;
+      if (V.chaseT > CRUISER_MIN_CHASE + 25){ plugVanLost(); }
+    }
+    function plugVanLost(){
+      var V = plugVan; if (!V) return;
+      V.crew = []; V.phase = "leave"; V.route = []; setNpcCd("jackboy", 40); S.threatCd = Math.max(S.threatCd || 0, 45);
+      toast("YOU LOST THE VAN — the jackboys gave up. The work is yours.", true); log("Shook the black van. The package is safe.", "good"); sndEscape(); addClout(2, "lost the plug's van");
+    }
+    function drawPlugRun(ents){
+      var R = plugRun, V = plugVan;
+      if (R){
+        var c = R.car;
+        if (R.phase !== "walk" || true) ents.push({ x:c.x, y:c.y + 6, fn:function(){
+          drawCar(c.x, c.y, "#2b6f6a", false, c.dir || 0, "sedan");
+          ctx.font = "900 10px Nunito, sans-serif"; ctx.textAlign = "center"; ctx.lineWidth = 3; ctx.strokeStyle = "rgba(255,255,255,.9)"; ctx.strokeText("THE PLUG", c.x, c.y - 36); ctx.fillStyle = "#0b6b63"; ctx.fillText("THE PLUG", c.x, c.y - 36);
+        } });
+        if (R.man){ var m = R.man; ents.push({ x:m.x, y:m.y, fn:function(){ drawPerson(m, { skin:m.skin, shirt:m.shirt, pants:m.pants, hair:m.hair, name:"PLUG'S RUNNER", role:"runner", accent:m.accent, shoes:m.shoes });
+          if (R.phase === "hand" || R.phase === "walk"){ ctx.font = "20px sans-serif"; ctx.textAlign = "center"; ctx.fillText("🛍️", m.x + 14, m.y - 44 + Math.sin(performance.now() / 140) * 2); } } }); }
+      }
+      if (V && V.active){
+        ents.push({ x:V.x, y:V.y + 6, fn:function(){
+          drawCar(V.x, V.y, "#0e0e12", false, V.dir || 0, "van");
+          var flash = Math.floor(performance.now() / 220) % 2 === 0;
+          ctx.font = "900 10px Nunito, sans-serif"; ctx.textAlign = "center"; ctx.lineWidth = 3; ctx.strokeStyle = "rgba(255,255,255,.9)"; ctx.strokeText("BLACK VAN", V.x, V.y - 40); ctx.fillStyle = flash ? "#e63946" : "#16161d"; ctx.fillText("BLACK VAN", V.x, V.y - 40);
+        } });
+        V.crew.forEach(function(o){ ents.push({ x:o.x, y:o.y, fn:function(){ drawPerson(o, { skin:o.skin, shirt:o.shirt, pants:o.pants, hair:o.hair, name:"JACKBOY", role:"jackboy", accent:o.accent, shoes:o.shoes }); } }); });
+      }
     }
     function hudPlugHtml(){
       if (!plugStatus()) return "";
@@ -7407,7 +7656,7 @@
        Call Trvp (T) and the ship brings ONE held power. G spends it.
        No filler: each one changes prices, heat, or who comes to you. */
     var POWERS = {
-      ghost:  { name:"GHOST MODE",  desc:"Invisible to cops, jackboys, drive-bys & ambushes for 30s — recharges 4.5 min" },
+      ghost:  { name:"BEAM UP",  desc:"The ship lifts you out of any chase and drops you in a quiet hood — no arrest, no jack, wanted level wiped. Recharges 4.5 min" },
       double: { name:"DOUBLE-UP",   desc:"2× money on every deal for 60s" },
       ice:    { name:"ICE",         desc:"Heat instantly zeroed — wanted level gone" },
       magnet: { name:"LICK MAGNET", desc:"Every lick on the block hunts YOU for 45s" },
@@ -7825,7 +8074,7 @@
       var crewN = crewHelp();
       copFineCap = cruiserBattle ? 1 : 0;   // flag, not a fee: a cruiser bust seizes +2% (see copComply)
       startBattle({type:"cop",title:cruiserBattle ? (grp ? "CRUISER STOP — " + grp.length + " OFFICERS" : "CRUISER STOP — " + nm.toUpperCase()) : "POLICE STOP",oppName:nm,oppEmoji:"👮‍♂️",oppCar:copCar,oppMeta:"Heat "+Math.round(S.heat)+" · "+wantedStars()+" stars · Pockets "+invCount()+(crewN ? " · "+crewN+" enforcer(s) posted at your trap" : ""),oppHp:cruiserBattle ? 92 : 88,text:(grp ? "The cruiser cuts you off — <b>all " + grp.length + " officers are out with guns up, all at once</b>. Scatter, spray and burst reach several of them; a pocket pistol won't cut it. " : cruiserBattle ? "One of the cruiser's officers has you — <b>just him, one-on-one</b>" + (cruiser.left > 1 ? " (" + (cruiser.left - 1) + " more behind him)" : " (the last of the crew)") + ". " : "")+nm + ": <b>\"Stop. Hands where I can see 'em.\"</b><br>Heat "+Math.round(S.heat)+" · Cash "+money(S.cash)+". What you do?",choices:[
-        {label:"BRIBE — PICK YOUR PRICE",sub:"$50: 1 star + 2 min grace · $150: 2 stars + 5 min · $400: ALL stars + 10 min grace",primary:true,run:function(){ var prevT = battleState.text, prevC = battleState.choices; battleSay(nm + " glances at the fold. <b>\"Talk numbers.\"</b>", bribeBattleChoices(prevT, prevC)); }},
+        {label:"BRIBE — PICK YOUR PRICE",sub:bribeSummary(),primary:true,run:function(){ var prevT = battleState.text, prevC = battleState.choices; battleSay(nm + " glances at the fold. <b>\"Talk numbers.\"</b>", bribeBattleChoices(prevT, prevC)); }},
         {label:"RUN",sub:cruiserBattle ? (S.driving ? "Your wheels vs theirs — a real shot" : "On foot against a cruiser crew — long odds") : "Foot chase — 55% you gone",run:function(){ if(Math.random()<(cruiserBattle ? (S.driving ? 0.6 : 0.3) : 0.55+(S.driving?0.15:0))){ battleSay("<b>You bolted!</b> " + nm + " stumbles — you've got a head start, but <b>it's not over</b>. Keep moving until the chase burns out (or break line of sight and put real distance on them).",[{label:"GO GO GO",primary:true,run:function(){ endBattle(); startPursuit(cruiserBattle, opts); addClout(1,"broke from a stop"); updateHUD(); }}]); } else battleSay("<b>Tackled.</b> That run made it worse.",[{label:"TAKE IT",run:function(){ copComply(true); }}]); }},
         {label:S.spaceGun?("FIGHT — " + spaceDef().name + " ⚡" + S.spaceGun.uses):"FIGHT",sub:S.spaceGun?("Space weapon: +" + Math.round(spaceBonus()*100) + "% odds · burns 1 charge"):(S.gunTier?("Strapped: " + gunName() + " — felony energy"):"Swing on Reed — desperate"),danger:true,run:function(){ var _sb=spaceBonus(); var p=0.28+gunBonus()+_sb+(crewN*0.08)-((typeof cop!=="undefined"&&cop.tough)||0)-(cruiserBattle?0.06:0)-(grp?0.1:0); startFight({p:p,oppName:nm,oppEmoji:"👮‍♂️",oppCar:copCar,armed:true,keepOpen:true,noFlee:true,group:grp,noAmbulance:!!grp,onResolve:function(won){ if(won){ var moreCops = 0; if (grp){ grp.forEach(function(go){ moreCops = officerDown(go); startOppAmbulance({ skin:cop.skin, shirt:cop.shirt || "#2b50c8", pants:cop.pants, hair:cop.hair, accent:cop.accent, kind:"cop" }, go.name); }); } else if (opts && opts.officer) moreCops = officerDown(opts.officer); else { S.heat = 0; copDown(false); } battleSay("<b>" + (grp ? "All " + grp.length + " officers go down — medics are rolling in for them." : nm + " goes down — medics are already rolling in for him.") + "</b>" + (moreCops ? " <b>" + moreCops + " more officer" + (moreCops > 1 ? "s" : "") + " still on you</b> — fight them one at a time, or break away." : " You got away after scrapping him! Whole block saw it — and you're gone before backup rolls. <b>Wanted level cleared.</b>"),[{label:moreCops ? "KEEP GOING" : "DIP",primary:true,run:function(){ S.threatCd = moreCops ? 4 : 45; endBattle(); dailyWin(); addClout(8,"scrapped the law & got away"); addHoodClout(S.district,4,"stood up to " + nm); updateHUD(); }}]); } else battleSay("<b>" + nm + " puts you down.</b> Fighting made the fine hurt.",[{label:"TAKE THE BUST",run:function(){ copComply(true); }}]); }}); }},
         {label:"COMPLY",sub:"Bust clean — they seize 10% of pocket cash (+1% a star) + your product",run:function(){ copComply(); }}
@@ -7988,7 +8237,7 @@
             } else beefLose(hood, tier);
             }});
           } },
-        { label:"RUN", sub:"~" + Math.round(pRun * 100) + "%" + (S.driving ? " — your wheels help" : "") + (S.ghostTime > 0 ? " — Ghost Mode helps" : ""), run:function(){
+        { label:"RUN", sub:"~" + Math.round(pRun * 100) + "%" + (S.driving ? " — your wheels help" : "") + (S.ghostTime > 0 ? " — Beam Up isn't in play" : ""), run:function(){
             if (Math.random() < pRun){ endBattle(); S.beef[hood] = Math.max(0, beefIn(hood) - 4); S.confrontCd = 4; toast(S.driving ? "Peeled out — they're eating dust." : "You broke off — keep moving!"); }
             else beefLose(hood, tier);
           } },
@@ -8428,6 +8677,41 @@
       if (S.dethroned) trvpPlot("plot_deth" + S.dethroned.day, ["They voted you out. It happens to every king at least once.", "Rebuild your clout to eighty-five, then take the chair back at the mansion gate — a fight, or a very large check."]);
       var th = S.table && S.table.heat;
       if (th >= 70 && !S.dethroned && Date.now() - _heatWarnAt > 240000){ _heatWarnAt = Date.now(); trvpHint_force("Chair heat " + Math.round(th) + " — one more bad move and the Table votes you out. Pay dues, take allies, strike first."); }
+    }
+    /* Trvp keeps an eye out for you: a short heads-up when something you care about changes — a power-up or the plug is ready again, a rival lives in the hood you just
+       reached, the law is closing in, a boost ran out. Quiet by design: one note at a time, at least 40s apart, the same note never more than once every 3 minutes,
+       and nothing while you're in a fight, a dialogue or a menu. */
+    var tw = { prev:null, last:-999, per:{}, clock:0, hood:null, q:[] };
+    function twNote(key, text){
+      if (tw.clock - (tw.per[key] || -999) < 180) return;
+      if (tw.q.some(function(x){ return x.key === key; })) return;
+      tw.q.push({ key:key, text:text }); if (tw.q.length > 3) tw.q.shift();
+    }
+    function updateTrvpWatch(dt){
+      if (!S || !S.username || S.over) return;
+      tw.clock += dt;
+      var snap = { beam:(S.ghostCd || 0) > 0, trvp:(S.trvpCd || 0) > 0, plug:cd("plugdrop") > 0, dbl:(S.doubleT || 0) > 0, mag:(S.magnetT || 0) > 0, boost:(S.boostT || 0) > 0, hot:S.heat >= 55, power:!!S.power };
+      var p = tw.prev; tw.prev = snap;
+      if (p){
+        if (p.beam && !snap.beam) twNote("beam", "BEAM UP has recharged — I can lift you out of trouble again. Call me (T) for another drop.");
+        if (p.trvp && !snap.trvp && !S.ship) twNote("trvp", "My ship's free again — call me (T) for a power-up drop or the store.");
+        if (p.plug && !snap.plug && plugStatus()) twNote("plug", "The plug can make another run — open CALL and pick your product. Pick a safe corner first.");
+        if (p.dbl && !snap.dbl) twNote("dbl", "Double-Up just ran out. Deals are back to normal pay.");
+        if (p.mag && !snap.mag) twNote("mag", "The Lick Magnet wore off — buyers will drift back to normal.");
+        if (p.boost && !snap.boost) twNote("boost", "Your boost faded — pace yourself.");
+        if (!p.hot && snap.hot) twNote("hot", "Heat's past 55 — Reed stops patrolling and starts hunting. Cool it down or stay near doorsteps.");
+      }
+      if (tw.hood !== S.district){
+        var arrived = tw.hood !== null; tw.hood = S.district;
+        if (arrived && S.opps){
+          var here = S.opps.filter(function(o){ return o.hood === S.district; });
+          if (here.length) twNote("opp_" + S.district, "Heads up: " + here[0].name + " (" + (OPP_KINDS[here[0].kind] || "opp").toLowerCase() + ") is still around this hood. Hit back from the CALL menu — or watch your back.");
+        }
+      }
+      if (!tw.q.length || tw.clock - tw.last < 40) return;
+      if (battleState || dialogue || menu || rescue || S.ship || beamUp || S.jackboy || (typeof cop !== "undefined" && cop.mode === "chase")) return;
+      var n = tw.q.shift(); tw.per[n.key] = tw.clock; tw.last = tw.clock;
+      toast("TRVP: " + n.text); log("TRVP: " + n.text, "good");
     }
     function trvpHint_force(text){ toast("TRVP: " + text); log("TRVP: " + text, "bad"); }
     function updateTrvpPlot(dt){
@@ -8902,10 +9186,14 @@
     /* ---------------- STRETCHER ----------------
        Medics carry a stretcher out of the ambulance, lift the patient onto it (blanket, pillow), and carry it to the rear doors. */
     function ambRear(car){ var d = car.dir | 0, o = d === 0 ? [-74, 0] : d === 2 ? [74, 0] : d === 1 ? [0, -74] : [0, 74]; return { x:car.x + o[0], y:car.y + o[1] }; }
+    /* the stretcher team walks AROUND buildings and fences (same obstacle-aware steering the cops use) instead of straight through them; if a leg takes too long it just gets there */
     function stretcherMove(st, tx, ty, sp, dt){
-      var dx = tx - st.x, dy = ty - st.y, d = Math.sqrt(dx * dx + dy * dy);
-      st.moving = d >= 4; if (!st.moving) return true;
-      var k = Math.min(1, sp * dt / d); st.x += dx * k; st.y += dy * k; st.face = dx >= 0 ? 1 : -1; return false;
+      if (!st._k || st._k.x !== tx || st._k.y !== ty){ st._k = { x:tx, y:ty }; st._legT = 0; }
+      st._legT += dt; if (st.r == null){ st.r = 22; st.walk = 0; }
+      if (st._legT > 7){ st.x = tx; st.y = ty; st.moving = false; return true; }
+      var px = st.x, arrived = chaseStep(st, tx, ty, sp, dt, 6);
+      st.moving = !arrived; if (st.x !== px) st.face = st.x > px ? 1 : -1;
+      return arrived;
     }
     function stretcherMedics(st, medics, dt){
       medics[0].x = st.x - 62; medics[1].x = st.x + 62; medics[0].y = medics[1].y = st.y - 2;
@@ -9048,7 +9336,6 @@
       addShake(8, 0.35);   // run up on = the screen feels it
       startBattle({type:"jackboy",title:"JACKBOY IN YOUR FACE",oppName:(S.jackboy && S.jackboy.name) ? "Jackboy — " + S.jackboy.name : "Jackboy",oppEmoji:"🥷",oppMeta:(enf?enf+" enforcer(s) posted at your trap · ":"Solo — your crew guards your traps, not the open street · ")+(S.gunTier?("Strapped: " + gunName()):"No strap"),oppHp:76,text:"<b>\"Run that. All of it.\"</b><br>Cash "+money(S.cash)+" · Product "+invCount()+" · "+(S.hasGun?"Your strap changes this.":"A strap from The Spot would've helped."),choices:[
         {label:S.spaceGun?("FIGHT — " + spaceDef().name + " ⚡" + S.spaceGun.uses):(S.gunTier?("FIGHT — " + gunName().toUpperCase() + " 🔫"):"FIGHT — HANDS"),sub:S.spaceGun?("Space weapon: +" + Math.round(spaceBonus()*100) + "% odds · burns 1 charge"):(S.gunTier?"Your iron changes this (+" + Math.round(gunBonus()*100) + "% odds)":"A gun from The Spot would've helped"),danger:true,primary:!!S.gunTier||!!S.spaceGun,run:function(){ var _sb=spaceBonus(); var p=0.45+enf*0.15+(S.tierIdx>=2?0.05:0)+gunBonus()+_sb; var _jn=S.jackboy&&S.jackboy.name; jackGone(50); startFight({p:p,oppName:(_jn?"Jackboy — "+_jn:"Jackboy"),relWho:_jn||null,oppEmoji:"🥷",armed:true,onResolve:function(won){ if(won){ if(_jn&&Math.random()<0.4) sendAway(_jn,"locked",10,"the law picked him up",S.district,true); dailyWin(); award("escape"); if(Math.random()<0.45){ var d=wealthPct(randi(30,85),0.004,0.012); earn(d,"Jackboy dropped fold"); toast("You won — he dropped "+money(d)+"!"); } else toast("You stood ground — he's gone."); addClout(S.gunTier?6:4,"stood ground vs jackboy"); addHoodClout(S.district,3,"jackboy backed down"); } else { var st=jackTake(0.25); toast("He caught you — took "+money(st)+" (25% of your pocket cash).",true); addClout(-7,"laid out by jackboy"); } updateHUD(); }}); }},
-        {label:"BRIBE $60",sub:funds()>=60?"Pay him to walk":"Short",disabled:funds()<60,run:function(){ payFunds(60); jackGone(45); battleSay("He counts it: <b>\"Smart.\"</b> Walks off.",[{label:"WALK CLEAN",primary:true,run:function(){ endBattle(); addHoodClout(S.district,1,"paid jackboy off"); }}]); updateHUD(); }},
         {label:"RUN",sub:"Head start — get 420+ out and hold it 6s, he loses you",run:function(){ var j=S.jackboy; endBattle(); S.confrontCd=4; if(j) j.stagger=1.4; toast(S.driving?"Peeled out!":"You broke off — RUN!"); }},
         {label:"GIVE IT UP 18%",sub:"Lose 18% of pocket cash + some product, walk",run:function(){ var jkRob3=S.jackboy; jackGone(50); var st2=jackTake(0.18, jkRob3); endBattle(); toast("Gave up "+money(st2)+" — walked clean.",true); addClout(-5,"got jacked"); updateHUD(); }}
       ]}); sndAlert();
@@ -11045,6 +11332,7 @@
     function sendAway(name, kind, hours, why, hood, byYou){
       if (!name || !AWAY_KINDS[kind]) return;
       if (!S.away) S.away = {};
+      if (DISTRICTS.some(function(dd){ return hoodKingpin(dd.id).name === name; })) hours = Math.min(hours, 24);   // a hood's kingpin is never gone for good
       S.away[name] = { until: nowAbs() + Math.round(hours * 60), kind: kind, hood: hood || S.district, byYou: !!byYou };
       if (byYou) relBump(name, -10);
       log(name + " is " + AWAY_KINDS[kind] + (why ? " — " + why : "") + ". Back in about " + Math.round(hours) + "h.", "");
@@ -11376,7 +11664,7 @@
           '<span class="gbtns"><button class="gbtn buy" data-claim="' + c.id + '" type="button"' + (done && !claimed ? "" : " disabled") + '>' + (claimed ? "CLAIMED" : "CLAIM") + '</button></span></div>';
       });
       html += '<p class="popevent" style="color:var(--ink); margin-top:10px">STORE — PREVIEW ONLY, NOTHING CHARGES HERE</p>';
-      [["Iced-Out Chain (cosmetic)", "$2.99"], ["Gold Coupe unlock", "$4.99"], ["Ghost Charge ×3", "$1.99"], ["Crew Banner Pack", "$0.99"]].forEach(function(it){
+      [["Iced-Out Chain (cosmetic)", "$2.99"], ["Gold Coupe unlock", "$4.99"], ["Beam Up Charge ×3", "$1.99"], ["Crew Banner Pack", "$0.99"]].forEach(function(it){
         html += '<div class="grow"><span class="gname" style="min-width:150px">' + it[0] + '</span><span class="gprice">' + it[1] + '</span><span class="gbtns"><button class="gbtn" type="button" disabled>IN THE APP</button></span></div>';
       });
       body.innerHTML = html;
@@ -12974,13 +13262,26 @@
       ctx.beginPath(); ctx.ellipse(1680, 1080, 30, 11, -0.3, 0, Math.PI*2); ctx.fill();
     }
 
+    /* the shooting arm: reaches toward the target with a pistol; a muzzle flash and a little kick when it just fired */
+    function drawGunArm(e, x, shY, sleeve, skin){
+      var ax = x + 8, ay = shY + 6, dx = (e.aimX || e.x + 1) - e.x, dy = ((e.aimY || e.y) - 18) - ay, d = Math.sqrt(dx * dx + dy * dy) || 1, ux = dx / d, uy = dy / d, kick = (e.kick || 0) > performance.now() ? -4 : 0, hx = ax + ux * (19 + kick), hy = ay + uy * (19 + kick);
+      ctx.save(); ctx.lineCap = "round";
+      ctx.strokeStyle = INK; ctx.lineWidth = 9.5; ctx.beginPath(); ctx.moveTo(ax, ay); ctx.lineTo(hx, hy); ctx.stroke();
+      ctx.strokeStyle = sleeve; ctx.lineWidth = 6.5; ctx.beginPath(); ctx.moveTo(ax, ay); ctx.lineTo(hx, hy); ctx.stroke();
+      ctx.fillStyle = skin; ctx.beginPath(); ctx.arc(hx, hy, 3.6, 0, Math.PI * 2); ctx.fill();
+      var gx = hx + ux * 11, gy = hy + uy * 11;
+      ctx.strokeStyle = INK; ctx.lineWidth = 6; ctx.beginPath(); ctx.moveTo(hx, hy); ctx.lineTo(gx, gy); ctx.stroke();
+      ctx.strokeStyle = "#6b7280"; ctx.lineWidth = 3.2; ctx.beginPath(); ctx.moveTo(hx, hy); ctx.lineTo(gx, gy); ctx.stroke();
+      if ((e.kick || 0) > performance.now()){ ctx.fillStyle = "#fff3b0"; ctx.beginPath(); ctx.arc(gx + ux * 6, gy + uy * 6, 6, 0, Math.PI * 2); ctx.fill(); ctx.fillStyle = "#ffb703"; ctx.beginPath(); ctx.arc(gx + ux * 6, gy + uy * 6, 3.2, 0, Math.PI * 2); ctx.fill(); }
+      ctx.restore();
+    }
     function drawPerson(e, o){
       // JET SET RADIO pass: lanky proportions, streetwear, big sneakers.
       // Top-down Pokémon camera, but everybody reads as a PERSON.
       var moving = !!e.moving;
       var walkPh = moving ? (e.walk || 0) : 0;
       var bob = moving ? Math.abs(Math.sin(walkPh)) * 2.4 : Math.sin(performance.now()/620 + (e.x % 7)) * 0.9;
-      var x = e.x, y = e.y - bob * 0.35;
+      var nowMs = performance.now(), x = e.x + ((e.hitUntil || 0) > nowMs ? Math.sin(nowMs / 28) * 3 : 0), y = e.y - bob * 0.35;
       var face = (e.face || 1);
       var role = o.role || "";
       var skin = o.skin || "#8d5524";
@@ -13030,7 +13331,8 @@
         ctx.beginPath(); ctx.arc(ax + 3.7, shY + 18 + swing * 0.35, 3.6, 0, Math.PI*2); ctx.fill(); outline(1.8);
       }
       arm(x - 19, armSwing, true);
-      arm(x + 11.5, -armSwing, false);
+      if ((e.aimUntil || 0) > nowMs){ drawGunArm(e, x, shY, top, skin); } else arm(x + 11.5, -armSwing, false);
+      if ((e.hitUntil || 0) > nowMs){ ctx.font = "900 16px Nunito, sans-serif"; ctx.textAlign = "center"; ctx.fillStyle = "#e63946"; ctx.fillText("✸", x + 16, y - 36 + Math.sin(nowMs / 60) * 2); }
       // ---- neck + head: bigger, expressive, shaded ----
       ctx.fillStyle = skin; rr(x - 3.5, shY - 6, 7, 7, 3); ctx.fill();
       var hy = shY - 14;
@@ -13241,6 +13543,7 @@
       if (S.car && !S.driving){
         var cpx = S.carPos.x, cpy = S.carPos.y;
         if (carRoll){ var ctt = (performance.now() - carRoll.t0) / 650; if (ctt >= 1) carRoll = null; else { var ce = 1 - Math.pow(1 - ctt, 3); cpx = lerp(carRoll.fx, cpx, ce); cpy = lerp(carRoll.fy, cpy, ce); } }
+        drawYourCarMarker(cpx, cpy, false);
         drawCar(cpx, cpy, carById(S.car).color, true, S.carDir || 0, carSprite());
       }
       drawCar(450, 70, "#f2b134", false, 0, "taxi");
@@ -13293,7 +13596,7 @@
       if (!S.ship) ents.push({ x: trvp.x, y: trvp.y, fn:function(){
         drawAlien(trvp, 1, true);
         if (!S.power && S.trvpCd <= 0){
-          // pulsing "!" — he's holding a Ghost charge for you
+          // pulsing "!" — he's holding a Beam Up charge for you
           var byy = trvp.y - 92 + Math.sin(performance.now()/240) * 3;
           ctx.fillStyle = "#5eead4";
           ctx.beginPath(); ctx.arc(trvp.x + 22, byy, 10, 0, Math.PI*2); ctx.fill(); outline(2.2);
@@ -13305,6 +13608,7 @@
       drawMansionGuards(ents);
       if (rescue) drawRescue(ents);
       if (tow) drawTow(ents);
+      drawPlugRun(ents);
       if (oppAmb) drawOppAmb(ents);
       if (hit) drawHit(ents);
       drawChalks(ents);
@@ -13319,6 +13623,7 @@
         if (rescue && rescue.kind === "police" && rescue.cuffed && rescue.phase <= 3){ ctx.font = "16px sans-serif"; ctx.textAlign = "center"; ctx.fillText("⛓️", player.x, player.y - 56); }
         if (S.driving){
           S.carDir = facingOf(player, player.x, player.y);
+          drawYourCarMarker(player.x, player.y, true);
           drawCar(player.x, player.y, carById(S.car).color, false, S.carDir, carSprite());
           // speed streaks — rolling should feel like rolling
           if (player.moving){
@@ -13337,18 +13642,11 @@
           ctx.fillStyle = INK; ctx.fillText(youName() + " — ROLLING", player.x, player.y - 44);
           return;
         }
-        if (S.ghostTime > 0){
-          ctx.save(); ctx.globalAlpha = 0.45;
-          drawPerson(player, youLook());
-          ctx.restore();
-          ctx.strokeStyle = "#5eead4"; ctx.lineWidth = 3;
-          ctx.beginPath(); ctx.arc(player.x, player.y + 4, 27 + Math.sin(performance.now()/180) * 3, 0, Math.PI*2); ctx.stroke();
-          ctx.font = "900 12px Nunito, sans-serif"; ctx.textAlign = "center";
-          ctx.lineWidth = 4; ctx.strokeStyle = "rgba(10,40,36,.85)";
-          var glabel = "GHOST " + Math.ceil(S.ghostTime) + "s";
-          ctx.strokeText(glabel, player.x, player.y - 58);
-          ctx.fillStyle = "#5eead4"; ctx.fillText(glabel, player.x, player.y - 58);
-        } else {
+        if (beamUp){
+          var bl = beamLift(), lift = bl * 150;
+          ctx.save(); ctx.globalAlpha = clamp(1.05 - bl * 0.9, 0.1, 1);
+          ctx.translate(0, -lift); drawPerson(player, youLook());
+          ctx.restore();        } else {
           drawPerson(player, youLook());
         }
         // interaction ring
@@ -13369,6 +13667,7 @@
       // Trvp's beam-down + the ship itself ride above the crowd
       if (S.beamTrvp && S.ship) drawAlien(S.beamTrvp, S.beamTrvp.alpha, false);
       if (S.ship) drawShip();
+      drawBeamUpShip();
 
       // quest timer bar
       if (S.quest === "deliver"){
