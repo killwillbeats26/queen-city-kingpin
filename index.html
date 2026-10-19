@@ -8145,8 +8145,10 @@
       return t;
     }
     function tableUnit(){
-      var t = tableState(), base = clamp(Math.round(funds() * 0.05 / 500) * 500, 2500, 400000);
-      return Math.max(2500, Math.round(base * (1 + t.round * 0.05) * (S.mansionOwned ? 1.6 : 1) / 500) * 500);   // grows every round, forever
+      // a Table 'unit' is a slice of what you're worth: 5% of your funds, creeping up to 10% as the rounds pile on (and 1.5× once you own the mansion) — so stakes keep growing forever with your wealth,
+      // but one move can never cost more than ~30% of your funds (the old round-based growth could outrun a smaller bankroll and strand it)
+      var t = tableState(), frac = Math.min(0.05 + 0.0025 * t.round, 0.10);
+      return Math.max(2500, Math.round(funds() * frac * (S.mansionOwned ? 1.5 : 1) / 500) * 500);
     }
     function tHeat(d){ var t = tableState(); t.heat = clamp(t.heat + d, 0, 100); if (t.heat >= 100 && !S.dethroned && !t.queue.some(function(q){ return q.type === "coup"; })) t.queue.unshift({ type:"coup" }); }
     function tTrust(name, d){ var t = tableState(); t.trust[name] = clamp((t.trust[name] || 0) + d, -6, 6); if (relBump) { try { relBump(name, d * 4); } catch(e){} } }
@@ -10349,12 +10351,14 @@
       if (takenLooks) takenLooks.push(lookKey(fallback));
       return fallback;
     }
+    /* jackboys are men with robber's street names — never the regular block names, and never a name a kingpin or lick already uses */
+    var JACK_NAMES = ["Snake", "Cutty", "Razor", "Knuckles", "Bones", "Dusty", "Bandit", "Twitch", "Trigger", "Shiv", "Rico", "Stitches", "Gator", "Crow", "Blade", "Skeet", "Big Mook", "Lil Wicked", "Hollow", "Pistol Pete", "Dirty Dre", "Sticky", "Scar", "Grim", "Bullet", "Lurch", "Jacks", "Switchblade", "Mad Dog", "Vulture", "Hatchet", "Nitro", "Rattler", "Ragman", "Slicks", "Shank", "Duke", "Fingers", "Crooked Cal", "Nine", "Tank", "Grizz", "Cobra", "Mugsy"];
     var jackDeck = [];
     function nextJackboyIdentity(){
       // shuffled name deck: a jackboy name can't repeat until the whole
       // deck has walked the block (38 faces deep)
       if (!jackDeck.length){
-        jackDeck = STREET_FIRST.slice(0);
+        jackDeck = JACK_NAMES.slice(0);
         for (var i = jackDeck.length - 1; i > 0; i--){ var j = Math.floor(Math.random() * (i + 1)); var t2 = jackDeck[i]; jackDeck[i] = jackDeck[j]; jackDeck[j] = t2; }
       }
       var nm = jackDeck.pop();
