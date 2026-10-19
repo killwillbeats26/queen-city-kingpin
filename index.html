@@ -9762,7 +9762,10 @@
       fxAfter(500, function(){
         fightRender();
         battleState.noLock = false;
-        battleState.choices = [{ label:"CONTINUE", primary:true, run:function(){ var cb = f.cfg.onResolve, vlook = (won && !f.fled && !f.cfg.noAmbulance) ? battleLook(battleState, "opp") : null; if (won) contractEvent("fight", 1); if (!f.cfg.keepOpen) endBattle(); if (cb) cb(won); if (vlook) startOppAmbulance(vlook, f.cfg.oppName || "He"); } }];
+        battleState.choices = [{ label:"CONTINUE", primary:true, run:function(){ var cb = f.cfg.onResolve, vlook = (won && !f.fled && !f.cfg.noAmbulance) ? battleLook(battleState, "opp") : null; if (won) contractEvent("fight", 1); if (!f.cfg.keepOpen) endBattle(); if (cb) cb(won); if (vlook) startOppAmbulance(vlook, f.cfg.oppName || "He");
+          /* YOU were put down: the medics always come (cops book you instead — their fights handle that themselves) */
+          if (!won && !f.cfg.noHospital && f.cfg.oppEmoji !== "👮‍♂️" && !rescue){ var armedFoe = (f.oppGun | 0) > 0 || !!f.cfg.armed; sendToHospital((f.oppGun | 0) >= 3 ? "murked" : (armedFoe ? "shot" : "beat"), 0); }
+        } }];
         renderBattle();
       });
     }
