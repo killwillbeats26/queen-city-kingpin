@@ -859,6 +859,13 @@
       /* battle screen + tags are painted light: always dark ink, even when the page theme is dark */
       .b-info, .b-bottom, .bchoice, .bchoice-label, .tag, .cdpill{ color:#14161d; }
       .lightbg, .lightbg *{ color:#14161d !important; }
+      /* Trvp's face rides his speech bubbles so you know it matters */
+      .dialogue .dface{ display:none; position:absolute; left:8px; top:-24px; width:54px; height:54px; border-radius:50%; border:3px solid var(--line); background:radial-gradient(circle at 40% 35%, #134e4a, #062b28); box-shadow:0 0 0 3px #5eead4, 3px 4px 0 var(--line); z-index:2; }
+      .dialogue.trvp .dface{ display:block; }
+      .dialogue.trvp p, .stage .dialogue.trvp p{ margin-left:62px; min-height:34px; }
+      .dialogue.trvp .dhint{ margin-left:62px; }
+      .stage .dialogue.trvp .dname, .dialogue.trvp .dname{ left:74px; }
+      .toast .tface{ width:32px; height:32px; border-radius:50%; border:2px solid #5eead4; background:#062b28; vertical-align:middle; margin-right:8px; }
       .lightbg .gown, .lightbg .ameta{ color:#3a4054 !important; }
       button, .acctrow, .gbtn, .choiceopt{ touch-action:manipulation; }
     </style>
@@ -945,6 +952,7 @@
           <div class="panelpop mappop" id="mapPop" role="dialog" aria-label="Map">
             <div class="pophead"><span id="mapTitle">MAP</span><span class="mapbtns"><button class="gbtn" id="mapBack" type="button">CITY</button><button class="gbtn" id="mapZoomOut" type="button" aria-label="Zoom out">−</button><button class="gbtn" id="mapZoomIn" type="button" aria-label="Zoom in">+</button><button class="gbtn" id="mapFit" type="button">FIT</button><button class="popx" id="mapClose" type="button" aria-label="Close map">✕</button></span></div>
             <div class="mapwrap"><canvas id="mapCanvas"></canvas></div>
+            <button class="gbtn buy" id="mapGo" type="button" style="display:none; width:100%; padding:11px 8px; font-size:13px">GO</button>
             <div class="mapinfo" id="mapInfo"></div>
             <div class="popfoot mapleg" id="mapLegend"></div>
           </div>
@@ -2162,7 +2170,7 @@
     var _mapSeenInit = false;
     function applyHoodLayout(){
       var L = hoodLayout();
-      if (S){ if (!S.visited) S.visited = {}; if (!S.visited[S.district]){ S.visited[S.district] = true; if (_mapSeenInit && typeof toast === "function") toast("MAP UPDATED — " + districtById(S.district).nick + " charted. Open the map from the menu (🗺) or press M."); } _mapSeenInit = true; }
+      if (S){ if (!S.visited) S.visited = {}; if (!S.visited[S.district]){ S.visited[S.district] = true; } _mapSeenInit = true; }
       for (var mi = buildings.length - 1; mi >= 0; mi--) if (buildings[mi].id === "mansion") buildings.splice(mi, 1);
       if (S.district === MANSION_HOOD) buildings.push({ id:"mansion", name:mansionUnlocked() ? "YOUR MANSION" : "KINGPIN'S MANSION", sign:mansionSignName(), x:2370, y:1425, w:435, h:270, wall:"#d9b44a", roof:"#6b4f10", door:{ x:2588, y:1386 } });
       buildings.forEach(function(b){
@@ -3642,12 +3650,35 @@
       ctrlHintEl.classList.add("gone");
     }
 
+    /* TRVP'S FACE: the green alien head (backwards cap, big black almond eyes, knowing smile) drawn once, stamped into dialogue bubbles and Trvp toasts */
+    var _trvpFaceSrc = null;
+    function trvpFaceSrc(){
+      if (_trvpFaceSrc) return _trvpFaceSrc;
+      var cv = document.createElement("canvas"); cv.width = cv.height = 112;
+      var c = cv.getContext("2d"), SK = "#6fce62", IK = "#14161d"; c.scale(2, 2); c.translate(0, 5);
+      c.fillStyle = "#f5f7fa"; c.beginPath(); c.ellipse(28, 58, 24, 12, 0, 0, Math.PI * 2); c.fill(); c.strokeStyle = IK; c.lineWidth = 2.2; c.stroke();
+      c.fillStyle = "#a5f3fc"; [[20, 51], [28, 53], [36, 51]].forEach(function(p){ c.beginPath(); c.arc(p[0], p[1], 2.4, 0, Math.PI * 2); c.fill(); });
+      c.fillStyle = SK; c.fillRect(24, 42, 8, 9);
+      c.fillStyle = SK; c.beginPath(); c.ellipse(28, 26, 19, 22, 0, 0, Math.PI * 2); c.fill();
+      c.fillStyle = "rgba(0,0,0,.2)"; c.beginPath(); c.ellipse(36, 28, 10, 17, 0, -Math.PI / 2, Math.PI / 2); c.fill();
+      c.strokeStyle = IK; c.lineWidth = 2.6; c.beginPath(); c.ellipse(28, 26, 19, 22, 0, 0, Math.PI * 2); c.stroke();
+      c.fillStyle = IK; c.save(); c.translate(19.5, 28); c.rotate(0.38); c.beginPath(); c.ellipse(0, 0, 4.2, 8, 0, 0, Math.PI * 2); c.fill(); c.restore();
+      c.save(); c.translate(36.5, 28); c.rotate(-0.38); c.beginPath(); c.ellipse(0, 0, 4.2, 8, 0, 0, Math.PI * 2); c.fill(); c.restore();
+      c.fillStyle = "#fff"; c.beginPath(); c.arc(18, 24, 1.9, 0, Math.PI * 2); c.fill(); c.beginPath(); c.arc(35, 24, 1.9, 0, Math.PI * 2); c.fill();
+      c.fillStyle = IK; c.beginPath(); c.arc(28, 18, 16, Math.PI * 1.02, Math.PI * 1.98); c.fill(); c.fillRect(9, 14, 15, 5);
+      c.strokeStyle = IK; c.lineWidth = 2.4; c.lineCap = "round"; c.beginPath(); c.arc(29, 38, 5.5, 0.15 * Math.PI, 0.75 * Math.PI); c.stroke();
+      c.fillStyle = "#5eead4"; c.beginPath(); c.arc(45, 8, 4, 0, Math.PI * 2); c.fill(); c.strokeStyle = IK; c.lineWidth = 1.6; c.stroke();
+      return (_trvpFaceSrc = cv);
+    }
+    function trvpFaceEl(px, cls){ var cv = document.createElement("canvas"); cv.width = cv.height = 112; cv.getContext("2d").drawImage(trvpFaceSrc(), 0, 0); cv.className = cls; cv.style.width = cv.style.height = px + "px"; cv.setAttribute("aria-hidden", "true"); return cv; }
     var toastTimer = null;
     function toast(msg, danger){
-      toastEl.textContent = msg;
+      var isT = /^TRVP:/.test(String(msg));
+      if (isT){ toastEl.textContent = ""; toastEl.appendChild(trvpFaceEl(32, "tface")); var sp = document.createElement("span"); sp.textContent = String(msg).replace(/^TRVP:\s*/, ""); toastEl.appendChild(sp); }
+      else toastEl.textContent = msg;
       toastEl.className = "toast show" + (danger ? " danger" : "");
       clearTimeout(toastTimer);
-      toastTimer = setTimeout(function(){ toastEl.className = "toast"; }, 3400);
+      toastTimer = setTimeout(function(){ toastEl.className = "toast"; }, isT ? 5600 : 3400);
     }
     function log(msg, kind){
       var li = document.createElement("li");
@@ -4042,7 +4073,7 @@
       // the buyer car takes A on foot OR at the window — out-of-hood money waits for no one
       if (buyerCar && buyerCar.state === "parked" && dist(p.x, p.y, buyerCar.x, buyerCar.y) < 95){
         var bod = districtById(buyerCar.origin);
-        return { label:"SELL TO THE BUYER CAR — from " + bod.nick + " · they pay " + bod.nick + " prices · " + Math.ceil(buyerCar.parkT) + "s left" + (function(){ var bb = buyerBest(); return bb ? " · best: " + bb.g.name + " " + (bb.d.pct >= 0 ? "+" : "") + bb.d.pct + "% vs here" : ""; })(), run: openBuyerSell, x: buyerCar.x, y: buyerCar.y, buyer:true };
+        return { label:"BUYER CAR (sell or rob) — from " + bod.nick + " · they pay " + bod.nick + " prices · " + Math.ceil(buyerCar.parkT) + "s left" + (function(){ var bb = buyerBest(); return bb ? " · best: " + bb.g.name + " " + (bb.d.pct >= 0 ? "+" : "") + bb.d.pct + "% vs here" : ""; })(), run: openBuyerSell, x: buyerCar.x, y: buyerCar.y, buyer:true };
       }
       // behind the wheel there is no A-interact: B steps out, and licks
       // come to the window on their own — A stays talk/interact/confirm
@@ -4392,6 +4423,9 @@
       var t = String(d.lines[i]), who = d.who, k = t.indexOf("§");
       if (k > 0){ who = t.slice(0, k); t = t.slice(k + 1); }
       if (dnameEl) dnameEl.textContent = who;
+      var isTr = /^TRVP$/i.test(String(who).trim());
+      if (isTr && !document.getElementById("dface")){ var fc = trvpFaceEl(54, "dface"); fc.id = "dface"; dialogueEl.insertBefore(fc, dialogueEl.firstChild); }
+      dialogueEl.classList.toggle("trvp", isTr);
       dialogueText.textContent = t;
     }
     function showDialogue(lines, onDone, who){
@@ -5800,9 +5834,32 @@
         ch.push({ label:"SELL " + g.name.toUpperCase() + " · " + diffText(bd), sub:od.nick + " pays " + money(bd.unit) + "/ea vs " + money(bd.here) + "/ea here · all " + have + " = " + (tot >= 0 ? "+" : "−") + money(Math.abs(tot)) + (tot >= 0 ? " more" : " less") + " than selling here", primary:bd.pct >= 20, run:(function(gg){ return function(){ openBuyerQty(gg); }; })(g) });
       });
       if (!carried.length) ch.push({ label:"NOT HOLDING ANYTHING", sub:"These buyers pay " + od.nick + " prices — come back loaded", disabled:true, run:function(){} });
+      ch.push({ label:"ROB THE CAR", sub:"They're carrying deal cash — a fight. Big heat, and " + od.nick + " holds a grudge.", danger:true, run:robBuyerCar });
       ch.push({ label:"WALK AWAY", sub:"Leave them waiting — the clock's still running", run:function(){ endBattle(); } });
       var bb = buyerBest();
       return { text:"<b>A car from " + od.nick + " just pulled up to the curb.</b><br>They pay <b>" + od.name + "</b> prices, not " + curDistrict().nick + " prices." + (bb ? "<br><b>Best margin: " + bb.g.name + " " + diffText(bb.d) + " over the Spot here.</b>" : "") + " What are you selling?", choices:ch };
+    }
+    /* ROB THE CAR: instead of serving the out-of-hood buyers, take the money they brought. It's a fight (they're armed and ready); win and you keep their deal cash,
+       lose and they take a fifth of yours. Either way: big heat, the buyers' hood holds a grudge, and no buyer car comes back for a few minutes. */
+    function robBuyerCar(){
+      if (!buyerCar || buyerCar.state !== "parked"){ toast("Too late — the buyer car rolled out."); endBattle(); return; }
+      var od = districtById(buyerCar.origin), enf = crewHelp(), originHood = buyerCar.origin;
+      var roll = Math.round((300 + (S.tierIdx | 0) * 350 + Math.min(funds() * 0.008, 4000)) * rand(0.8, 1.4) / 5) * 5;
+      var p = 0.42 + gunBonus() * 0.8 + enf * 0.12 + (S.spaceGun ? spaceBonus() : 0) + ((S.tierIdx | 0) >= 2 ? 0.04 : 0);
+      addShake(8, 0.35);
+      startFight({ p:p, oppName:od.nick + " BUYERS", oppEmoji:"🚗", oppCar:buyerDealCar(od), armed:true, onResolve:function(won){
+        if (won){
+          earn(roll, "Robbed the " + od.nick + " buyer car"); addClout(3, "jacked a buyer car");
+          toast("You emptied the " + od.nick + " buyer car — " + money(roll) + " in deal cash.");
+        } else {
+          var st = jackTake(0.2); addClout(-4, "got put down by a buyer car");
+          toast("The " + od.nick + " buyers beat you off the car — took " + money(st) + " (20% of your pocket cash).", true);
+        }
+        addHeat(22); addBeef(originHood, 14, od.nick + " buyers"); addHoodClout(S.district, -4, "robbed out-of-hood buyers");
+        if (buyerCar) buyerCarLeave();
+        buyerTimer = rand(140, 220);
+        updateHUD();
+      } });
     }
     function openBuyerSell(){
       if (!buyerCar || buyerCar.state !== "parked") return;
@@ -6196,6 +6253,7 @@
         updateContract(dt);
         updateMansionContract(dt);
         updateTable(dt);
+        updateTrvpPlot(dt);
         updateKpHit(dt);
 
         // quest timer
@@ -6494,6 +6552,7 @@
     function openMap(view){
       if (battleState || dialogue || rescue) return;
       if (menu) closeMenu();
+      mapSt.travel = false; mapSt.sel = null;
       mapSt.focusOnOpen = view === "city" ? null : S.district;
       openMenu("map");
     }
@@ -6541,19 +6600,51 @@
       }
       return false;
     }
-    /* a hood's region: a soft, slightly irregular blob rather than a box */
-    function blobPath(id, x0, y0, w, h){
-      var seed = hashStr(id), pts = [], n = 14, cx = x0 + w / 2, cy = y0 + h / 2, i;
-      for (i = 0; i < n; i++){
-        var a = i / n * Math.PI * 2, e = 1 / Math.pow(Math.pow(Math.abs(Math.cos(a)), 3.4) + Math.pow(Math.abs(Math.sin(a)), 3.4), 1 / 3.4);   // squarish ellipse
-        var j = 0.93 + ((seed >> (i % 16)) & 3) * 0.028;
-        pts.push({ x:cx + Math.cos(a) * w / 2 * 0.98 * e * j * 0.78 * 1.14, y:cy + Math.sin(a) * h / 2 * 0.98 * e * j * 0.78 * 1.14 });
+    /* the hoods touch: each hood's region is its share of the city — the plane split halfway between neighbouring hoods (clipped to a box round it, so edge hoods don't
+       swallow the map), with the Ohio River keeping Covington on its own side of the water. */
+    var MAP_RIVER = [[-60, 1560], [700, 1650], [1400, 1770], [2050, 1800], [2750, 1700], [3350, 1590], [3800, 1620]], RIVER_HALF = 36, HOOD_POLYS = null;
+    function riverYAt(x){
+      for (var i = 0; i < MAP_RIVER.length - 1; i++){ var a = MAP_RIVER[i], b = MAP_RIVER[i + 1]; if (x <= b[0] || i === MAP_RIVER.length - 2) return a[1] + (b[1] - a[1]) * clamp((x - a[0]) / (b[0] - a[0]), 0, 1); }
+      return MAP_RIVER[0][1];
+    }
+    function clipHalf(poly, nx, ny, c){
+      var out = [];
+      for (var i = 0; i < poly.length; i++){
+        var p = poly[i], q = poly[(i + 1) % poly.length], dp = nx * p.x + ny * p.y - c, dq = nx * q.x + ny * q.y - c;
+        if (dp <= 0) out.push(p);
+        if ((dp < 0 && dq > 0) || (dp > 0 && dq < 0)){ var t = dp / (dp - dq); out.push({ x:p.x + (q.x - p.x) * t, y:p.y + (q.y - p.y) * t }); }
       }
+      return out;
+    }
+    function buildHoodPolys(){
+      var ids = Object.keys(MAP_POS), res = {};
+      ids.forEach(function(id){
+        var st = MAP_POS[id], poly = [{ x:Math.max(0, st.x - 620), y:Math.max(0, st.y - 420) }, { x:Math.min(MAP_W, st.x + 620), y:Math.max(0, st.y - 420) }, { x:Math.min(MAP_W, st.x + 620), y:Math.min(MAP_H, st.y + 420) }, { x:Math.max(0, st.x - 620), y:Math.min(MAP_H, st.y + 420) }];
+        ids.forEach(function(o){ if (o === id) return; var t = MAP_POS[o]; poly = clipHalf(poly, t.x - st.x, t.y - st.y, ((t.x * t.x + t.y * t.y) - (st.x * st.x + st.y * st.y)) / 2); });
+        var y0 = riverYAt(st.x - 620), y1 = riverYAt(st.x + 620), m = (y1 - y0) / 1240, bb = y0 - m * (st.x - 620);
+        if (id === "covington") poly = clipHalf(poly, m, -1, -(bb + RIVER_HALF)); else poly = clipHalf(poly, -m, 1, bb - RIVER_HALF);
+        res[id] = poly;
+      });
+      return res;
+    }
+    function hoodPath(id){
+      if (!HOOD_POLYS) HOOD_POLYS = buildHoodPolys();
+      var poly = HOOD_POLYS[id] || [];
       ctx2.beginPath();
-      var m0 = { x:(pts[n - 1].x + pts[0].x) / 2, y:(pts[n - 1].y + pts[0].y) / 2 }; ctx2.moveTo(m0.x, m0.y);
-      for (i = 0; i < n; i++){ var p = pts[i], q = pts[(i + 1) % n]; ctx2.quadraticCurveTo(p.x, p.y, (p.x + q.x) / 2, (p.y + q.y) / 2); }
+      for (var i = 0; i < poly.length; i++){ var p = m2s(poly[i].x, poly[i].y); if (i) ctx2.lineTo(p.x, p.y); else ctx2.moveTo(p.x, p.y); }
       ctx2.closePath();
     }
+    function hoodAt(wx, wy){
+      if (!HOOD_POLYS) HOOD_POLYS = buildHoodPolys();
+      var hit = null;
+      Object.keys(HOOD_POLYS).forEach(function(id){
+        var poly = HOOD_POLYS[id], inside = false;
+        for (var i = 0, j = poly.length - 1; i < poly.length; j = i++){ var a = poly[i], b = poly[j]; if (((a.y > wy) !== (b.y > wy)) && (wx < (b.x - a.x) * (wy - a.y) / (b.y - a.y) + a.x)) inside = !inside; }
+        if (inside) hit = id;
+      });
+      return hit;
+    }
+    function blobPath(id, x0, y0, w, h){ hoodPath(id); }
     var POI = { apt:{ ic:"🏠", c:"#f59e0b" }, store:{ ic:"🛒", c:"#f97316" }, club:{ ic:"🎵", c:"#8b5cf6" }, trap:{ ic:"💊", c:"#64748b" }, hotel:{ ic:"🏨", c:"#14b8a6" }, auto:{ ic:"🚗", c:"#ef4444" },
                 traphouse:{ ic:"🏚️", c:"#6b7280" }, bizstore:{ ic:"🏪", c:"#22a06b" }, bizbar:{ ic:"🍺", c:"#b45309" }, mansion:{ ic:"👑", c:"#d4a017" }, landmark:{ ic:"📍", c:"#0ea5e9" } };
     function drawPin(x, y, R, ic, col, owned){
@@ -6565,7 +6656,7 @@
       ctx2.lineWidth = Math.max(1.5, R * 0.14); ctx2.strokeStyle = owned ? "#22c55e" : "#fff"; ctx2.beginPath(); ctx2.arc(x, y - R * 0.9, R, 0, Math.PI * 2); ctx2.stroke();
       ctx2.font = Math.round(R * 1.15) + "px sans-serif"; ctx2.textAlign = "center"; ctx2.textBaseline = "middle"; ctx2.fillStyle = "#fff"; ctx2.fillText(ic, x, y - R * 0.88);
     }
-    function mapSeen(id){ return !!(S.visited && S.visited[id]) || id === S.district; }
+    function mapSeen(id){ return true; }   // the whole city is on the map from the start — no fog
     function drawHood(id){
       var d = districtById(id), L = HOOD_LAYOUTS[id] || HOOD_LAYOUTS.dtw, t = tileOf(id), a = m2s(t.x0, t.y0), tw = TILE_W * mapScale(), th = TILE_H * mapScale(), kk = mapScale() * TK;
       if (a.x > mapSt.w + 20 || a.y > mapSt.h + 20 || a.x + tw < -20 || a.y + th < -20) return;
@@ -6630,6 +6721,8 @@
       var fsH = clamp(tw * 0.085, 10, 34);
       var ly = tw > 215 ? a.y + th * 0.04 + fsH * 0.7 : a.y + th * 0.5;
       mHalo(d.nick, a.x + tw / 2, ly, fsH, "#fff", "rgba(10,14,22,.85)");
+      if (mapSt.travel && !cur){ var fareTxt = drivePick ? "ROLL FREE" : (funds() < d.fare ? "HITCH · free" : "$" + d.fare) + " · ~" + (funds() < d.fare ? d.mins * 2 : d.mins) + " min"; mHalo(fareTxt, a.x + tw / 2, ly + fsH * 1.05, clamp(tw * 0.04, 9, 15), "#bbf7d0", "rgba(10,14,22,.9)"); }
+      if (mapSt.travel && mapSt.sel === id){ ctx2.strokeStyle = "#ffd23f"; ctx2.lineWidth = Math.max(4, tw * 0.016); hoodPath(id); ctx2.stroke(); ctx2.fillStyle = "rgba(255,210,63,.14)"; ctx2.fill(); }
       if (tw <= 215){ if (badges) mHalo(badges, a.x + tw / 2, ly + fsH * 0.95, fsH * 0.7, "#fff"); if (tw > 110) mHalo(hoodKingpin(id).name, a.x + tw / 2, ly + fsH * 1.8, clamp(tw * 0.04, 8, 12), "#ffd23f", null, 800); }
       else if (badges) mHalo(badges, a.x + tw / 2, ly + fsH * 0.9, fsH * 0.6, "#fff");
       if (cur){
@@ -6643,16 +6736,16 @@
     function drawMapWorld(){
       var a = m2s(0, 0), b = m2s(MAP_W, MAP_H), k = mapScale();
       ctx2.fillStyle = "#1c2a24"; ctx2.fillRect(a.x, a.y, b.x - a.x, b.y - a.y);   // land
-      // the Ohio River — flows west → east just south of downtown, Covington across it
-      var rv = [[-60, 1560], [700, 1650], [1400, 1770], [2050, 1800], [2750, 1700], [3350, 1590], [3800, 1620]].map(function(p){ return m2s(p[0], p[1]); });
-      function riverPath(){ ctx2.beginPath(); ctx2.moveTo(rv[0].x, rv[0].y); for (var i = 1; i < rv.length - 1; i++){ var mx = (rv[i].x + rv[i + 1].x) / 2, my = (rv[i].y + rv[i + 1].y) / 2; ctx2.quadraticCurveTo(rv[i].x, rv[i].y, mx, my); } ctx2.lineTo(rv[rv.length - 1].x, rv[rv.length - 1].y); }
-      ctx2.lineCap = "round"; ctx2.strokeStyle = "#173b6b"; ctx2.lineWidth = 130 * k; riverPath(); ctx2.stroke();
-      ctx2.strokeStyle = "#2f6fb5"; ctx2.lineWidth = 104 * k; riverPath(); ctx2.stroke();
-      ctx2.strokeStyle = "rgba(190,220,255,.35)"; ctx2.lineWidth = Math.max(1, 6 * k); ctx2.setLineDash([26 * k, 30 * k]); riverPath(); ctx2.stroke(); ctx2.setLineDash([]);
-      var rl = m2s(3050, 1625); ctx2.save(); ctx2.translate(rl.x, rl.y); ctx2.rotate(-0.08); mHalo("OHIO RIVER", 0, 0, clamp(60 * k, 10, 34), "rgba(200,225,255,.85)", "rgba(10,30,60,.6)", 800); ctx2.restore();
-      var rl2 = m2s(560, 1625); ctx2.save(); ctx2.translate(rl2.x, rl2.y); ctx2.rotate(0.05); mHalo("OHIO RIVER", 0, 0, clamp(60 * k, 10, 34), "rgba(200,225,255,.85)", "rgba(10,30,60,.6)", 800); ctx2.restore();
       mapSt.pins = []; mapLabels = [];
       Object.keys(MAP_POS).sort(function(x, y){ return MAP_POS[x].y - MAP_POS[y].y; }).forEach(function(id){ drawHood(id); });
+      // the Ohio River — flows west → east just south of downtown; the hoods touch on both banks and the water is the only gap, Covington across it
+      var rv = MAP_RIVER.map(function(p){ return m2s(p[0], p[1]); });
+      function riverPath(){ ctx2.beginPath(); ctx2.moveTo(rv[0].x, rv[0].y); for (var i = 1; i < rv.length - 1; i++){ var mx = (rv[i].x + rv[i + 1].x) / 2, my = (rv[i].y + rv[i + 1].y) / 2; ctx2.quadraticCurveTo(rv[i].x, rv[i].y, mx, my); } ctx2.lineTo(rv[rv.length - 1].x, rv[rv.length - 1].y); }
+      ctx2.lineCap = "round"; ctx2.strokeStyle = "#173b6b"; ctx2.lineWidth = (RIVER_HALF * 2 + 10) * k; riverPath(); ctx2.stroke();
+      ctx2.strokeStyle = "#2f6fb5"; ctx2.lineWidth = (RIVER_HALF * 2 - 2) * k; riverPath(); ctx2.stroke();
+      ctx2.strokeStyle = "rgba(190,220,255,.35)"; ctx2.lineWidth = Math.max(1, 5 * k); ctx2.setLineDash([26 * k, 30 * k]); riverPath(); ctx2.stroke(); ctx2.setLineDash([]);
+      var rl = m2s(3050, 1625); ctx2.save(); ctx2.translate(rl.x, rl.y); ctx2.rotate(-0.08); mHalo("OHIO RIVER", 0, 0, clamp(46 * k, 9, 30), "rgba(200,225,255,.9)", "rgba(10,30,60,.6)", 800); ctx2.restore();
+      var rl2 = m2s(560, 1625); ctx2.save(); ctx2.translate(rl2.x, rl2.y); ctx2.rotate(0.05); mHalo("OHIO RIVER", 0, 0, clamp(46 * k, 9, 30), "rgba(200,225,255,.9)", "rgba(10,30,60,.6)", 800); ctx2.restore();
       // the Roebling Suspension Bridge: downtown ↔ Covington
       var b1 = m2s(1755, 1700), b2 = m2s(1755, 1880); ctx2.strokeStyle = "#f4f1e6"; ctx2.lineWidth = Math.max(2, 14 * k); ctx2.lineCap = "butt"; ctx2.beginPath(); ctx2.moveTo(b1.x, b1.y); ctx2.lineTo(b2.x, b2.y); ctx2.stroke();
       ctx2.strokeStyle = "#7a5c2a"; ctx2.lineWidth = Math.max(1, 5 * k); ctx2.stroke();
@@ -6660,7 +6753,7 @@
       mHalo("▲ N", mapSt.w - 28, 18, 13, "#fff");
     }
     function mapLegendHtml(){
-      return "📍 pins are places: 🛒 store · 🎵 club · 💊 The Spot (market) · 🏨 hotel · 🚗 auto · 🏚️ trap house · 🏪 store/bar to buy · 🍺 bar · 🏥 hospital · ⚖️ Justice Center · 👑 kingpin's corner / mansion · 👽 Trvp · 🚇 transit · 🏠 apartments. Green ring = yours. Grey regions are unexplored — ride transit there to chart them. Zoom in for names and streets; tap a pin or a hood.";
+      return "📍 pins are places: 🛒 store · 🎵 club · 💊 The Spot (market) · 🏨 hotel · 🚗 auto · 🏚️ trap house · 🏪 store/bar to buy · 🍺 bar · 🏥 hospital · ⚖️ Justice Center · 👑 kingpin's corner / mansion · 👽 Trvp · 🚇 transit · 🏠 apartments. Green ring = yours. Every hood is on the map; gold outline = a hood you hold. Zoom in for names and streets; tap a pin or a hood. Opening it from TRANSIT or the city limit? Tap the hood you're headed to, then GO.";
     }
     function drawMap(){
       if (!mapCv) return;
@@ -6675,14 +6768,32 @@
       mapSt.dpr = dpr; mapSt.w = Math.max(200, r.width); mapSt.h = Math.max(160, r.height);
       mapCv.width = Math.round(mapSt.w * dpr); mapCv.height = Math.round(mapSt.h * dpr);
       var seenN = 0; DISTRICTS.forEach(function(d){ if (mapSeen(d.id)) seenN++; });
-      mapTitleEl.textContent = "CINCINNATI — " + seenN + "/" + DISTRICTS.length + " CHARTED";
+      mapTitleEl.textContent = mapSt.travel ? (drivePick ? "CITY LIMIT — TAP A HOOD TO ROLL" : "TRANSIT — TAP A HOOD TO RIDE") : "CINCINNATI — ALL " + DISTRICTS.length + " HOODS";
       document.getElementById("mapBack").textContent = "HERE";
       document.getElementById("mapLegend").textContent = mapLegendHtml();
       if (mapSt.focusOnOpen !== undefined){ if (mapSt.focusOnOpen) mapFocusHood(mapSt.focusOnOpen); else mapFit(); mapSt.focusOnOpen = undefined; }
-      mapClamp(); drawMap();
+      mapClamp(); mapGoUpdate(); drawMap();
       if (!mapSt.running){ mapSt.running = true; (function loop(){ if (menu !== "map"){ mapSt.running = false; return; } drawMap(); requestAnimationFrame(loop); })(); }
     }
+    function travelInfoText(id){
+      var dd = districtById(id), hitch = !drivePick && funds() < dd.fare;
+      return dd.name + " — kingpin " + hoodKingpin(id).name + " · " + (drivePick ? "roll there free in your whip" : (hitch ? "hitch: free, " + dd.mins * 2 + " min" : "fare $" + dd.fare + ", ~" + dd.mins + " min"));
+    }
+    function mapGoUpdate(){
+      var gb = document.getElementById("mapGo"); if (!gb) return;
+      if (mapSt.travel && mapSt.sel && mapSt.sel !== S.district){ var dd = districtById(mapSt.sel); gb.style.display = "block"; gb.textContent = (drivePick ? "ROLL TO " : "RIDE TO ") + dd.nick + (drivePick ? " — FREE" : " — " + (funds() < dd.fare ? "HITCH" : "$" + dd.fare)); }
+      else gb.style.display = "none";
+    }
     function mapTap(sx, sy){
+      if (mapSt.travel){
+        var tbest = null, tbd = 1e9;
+        mapSt.pins.forEach(function(p){ var dq = Math.hypot(p.x - sx, p.y - sy); if (dq < p.r + 8 && dq < tbd){ tbd = dq; tbest = p; } });
+        var tw0 = s2m(sx, sy), th = tbest ? tbest.hood : hoodAt(tw0.x, tw0.y);
+        if (!th){ mapInfoEl.textContent = "Tap a hood to pick where you're going."; return; }
+        if (th === S.district){ mapInfoEl.textContent = "You're in " + districtById(th).name + " right now — tap another hood."; mapSt.sel = null; mapGoUpdate(); return; }
+        if (mapSt.sel === th){ travelTo(th); return; }   // second tap on the same hood = go
+        mapSt.sel = th; mapInfoEl.textContent = travelInfoText(th) + " — tap again or press GO."; mapGoUpdate(); return;
+      }
       // a pin?
       var best = null, bd = 1e9;
       mapSt.pins.forEach(function(p){ var dq = Math.hypot(p.x - sx, p.y - sy); if (dq < p.r + 8 && dq < bd){ bd = dq; best = p; } });
@@ -6697,11 +6808,9 @@
         mapInfoEl.textContent = info; return;
       }
       // a hood? tap it to zoom in on it
-      var w = s2m(sx, sy), hit = null;
-      Object.keys(MAP_POS).forEach(function(id){ var t = tileOf(id); if (w.x >= t.x0 && w.x <= t.x0 + TILE_W && w.y >= t.y0 && w.y <= t.y0 + TILE_H) hit = id; });
+      var w = s2m(sx, sy), hit = hoodAt(w.x, w.y);
       if (!hit){ mapInfoEl.textContent = ""; return; }
       var twPx = TILE_W * mapScale(), dd = districtById(hit);
-      if (!mapSeen(hit)){ mapInfoEl.textContent = dd.name + " — UNEXPLORED. Ride transit there ($" + dd.fare + ") to chart it."; return; }
       mapInfoEl.textContent = dd.name + " — kingpin " + hoodKingpin(hit).name + (S.held && S.held[hit] ? " (yours)" : "") + (warOf(hit) ? " · AT WAR" : "") + (beefIn(hit) >= 8 ? " · beef " + Math.round(beefIn(hit)) : "");
       if (twPx < 260) mapFocusHood(hit);
     }
@@ -6726,9 +6835,11 @@
       document.getElementById("mapZoomOut").addEventListener("click", function(){ mapZoomBy(1 / 1.4); });
       document.getElementById("mapFit").addEventListener("click", function(){ mapFit(); mapInfoEl.textContent = ""; });
       document.getElementById("mapBack").addEventListener("click", function(){ mapFocusHood(S.district); });
+      document.getElementById("mapGo").addEventListener("click", function(){ if (mapSt.travel && mapSt.sel && mapSt.sel !== S.district) travelTo(mapSt.sel); });
       window.addEventListener("resize", function(){ if (menu === "map") renderMap(); });
     })();
     function openMenu(which){
+      if (which === "travel"){ which = "map"; mapSt.travel = true; mapSt.sel = null; mapSt.focusOnOpen = null; }   // the TRANSIT and city-limit pickers ARE the map now
       menu = which;
       playSfx("open");
       stage.classList.add("talking");
@@ -6751,7 +6862,7 @@
       choiceState = null;
       battleState = null;
       drivePick = false;   // abandoning the city-limit hoods list must not leak the free-drive flag into later transit rides
-      drivePick = false;
+      mapSt.travel = false; mapSt.sel = null;
       [marketPopEl, travelPopEl, autoPopEl, crewPopEl, trvpPopEl, choicePopEl, battlePopEl, bankPopEl, acctPopEl, hudPopEl, mapPopEl].forEach(function(p){ if (p) p.classList.remove("show"); });
       if (!dialogue) stage.classList.remove("talking");
     }
@@ -8076,6 +8187,42 @@
         var ev = tableRollEvent(); if (ev) t.queue.push(ev);
         t.nextDay = S.day + (S.mansionOwned ? randi(1, 2) : randi(2, 4));
       }
+    }
+    /* ---------------- TRVP TELLS YOU THE KINGPIN PLOT, rung by rung ----------------
+       Short, face-and-name dialogues at each milestone on the road (ladder → Hustler → Boss → Kingpin → the mansion fund → the mansion → a coup), once each (saved in hints).
+       Veterans skip the rungs they've already climbed and only hear the one that matches where they are. */
+    var _trvpPlotQ = [], _trvpPlotT = 0, _heatWarnAt = 0;
+    function trvpSeen(k){ if (!S.hints) S.hints = {}; return !!S.hints[k]; }
+    function trvpMark(k){ if (!S.hints) S.hints = {}; S.hints[k] = true; }
+    function trvpPlot(k, lines){ if (trvpSeen(k)) return; trvpMark(k); _trvpPlotQ.push(lines); }
+    function trvpPlotCheck(){
+      var t = S.tierIdx | 0, fn = funds(), P = MANSION_PRICE;
+      if (t >= 3){ ["plot_ladder", "plot_hustler", "plot_boss"].forEach(trvpMark); }
+      else if (t >= 2){ ["plot_ladder", "plot_hustler"].forEach(trvpMark); }
+      else if (t >= 1) trvpMark("plot_ladder");
+      if (S.totalEarned >= 400) trvpPlot("plot_ladder", ["Kid — listen up. There's a ladder in this city: Rookie, Hustler, Boss, Kingpin.", "You climb it with clout: deal clean, win fights, stack achievements, run the corners.", "At the very top sits the Table — the kingpins who run everything — and a mansion up in Walnut Hills. I'll keep you posted."]);
+      if (t >= 1) trvpPlot("plot_hustler", ["Hustler. Told you. Bigger licks talk to you now.", "Next rung is Boss — then Kingpin. Keep your name loud and your pockets heavy."]);
+      if (t >= 2) trvpPlot("plot_boss", ["Boss. One rung left.", "Kingpin takes score 120, ten achievements and seven days on the street — no weekend crowns.", "And here's what nobody tells you: once you're Kingpin, the Table comes for your money. Alliances, double-crosses, a mansion that costs ten million. It never stops."]);
+      if (t >= 3 && !S.dethroned) trvpPlot("plot_king", ["KINGPIN. They'll feel that all the way across the river.", "Now it's the Table's game: dues every week, alliances, crosses and triple-crosses. Watch your CHAIR HEAT in the mansion menu — hit a hundred and they vote you out.", "The Walnut Hills mansion's for sale: ten million. The big money's still flipping packs — buy low in one hood, sell hot in another."]);
+      if (t >= 3 && !S.mansionOwned && !S.dethroned){
+        var hi = -1; [0.25, 0.5, 0.75, 1].forEach(function(fr, i){ if (fn >= P * fr) hi = i; });
+        for (var i = 0; i < hi; i++) trvpMark("plot_fund" + i);
+        if (hi >= 0) trvpPlot("plot_fund" + hi, [["A quarter of the way to the mansion. Keep flipping weight.", "Halfway to the mansion. The Table's started noticing the number.", "Three quarters. Don't let anybody at the Table see you sweat.", "You've got the ten million. Walnut Hills — go sign the deed."][hi]]);
+      }
+      if (S.mansionOwned && !S.dethroned) trvpPlot("plot_owned", ["THE WORLD IS YOURS. Now keep it.", "Every kingpin at the Table is counting your money. An ally is just a knife with a smile — watch the chair heat."]);
+      if (S.dethroned) trvpPlot("plot_deth" + S.dethroned.day, ["They voted you out. It happens to every king at least once.", "Rebuild your clout to eighty-five, then take the chair back at the mansion gate — a fight, or a very large check."]);
+      var th = S.table && S.table.heat;
+      if (th >= 70 && !S.dethroned && Date.now() - _heatWarnAt > 240000){ _heatWarnAt = Date.now(); trvpHint_force("Chair heat " + Math.round(th) + " — one more bad move and the Table votes you out. Pay dues, take allies, strike first."); }
+    }
+    function trvpHint_force(text){ toast("TRVP: " + text); log("TRVP: " + text, "bad"); }
+    function updateTrvpPlot(dt){
+      if (!S || !S.username || S.over) return;
+      _trvpPlotT += dt; if (_trvpPlotT < 2.5) return; _trvpPlotT = 0;
+      if (!S.tutorialDone) return;
+      trvpPlotCheck();
+      if (!_trvpPlotQ.length) return;
+      if (driveby || battleState || dialogue || menu || rescue || oppAmb || hit || S.holedUp) return;
+      showDialogue(_trvpPlotQ.shift(), null, "TRVP");
     }
     var _tableT = 0;
     function updateTable(dt){
@@ -9825,13 +9972,13 @@
       ensurePrices(d.id);
       applyHoodLayout();
       closeMenu();
-      // arrive at the new district's Spot door (wherever this hood put it)
-      var tDoor = buildingById("trap").door;
-      player.x = tDoor.x; player.y = tDoor.y - 49; player.vx = 0; player.vy = 0;
+      // the bus lets you off at the new hood's BUS STOP (on the top sidewalk), not at The Spot
+      player.x = TRANSIT.x + rand(-26, 26); player.y = TRANSIT.y + 54; player.vx = 0; player.vy = 0;
+      try { ejectFromSolids(player); } catch(e){}
       camPos.x = null;
       S.driving = false;
-      // your whip rides the transporter too — never strand it across town, parked on the street by the lot
-      if (S.car) S.carPos = { x: 2340, y: 2035 };
+      // your whip rides the transporter too — it waits at the curb nearest the stop
+      if (S.car){ var cpSp = nearestPullSpot(player.x, player.y, 900); S.carPos = cpSp ? { x:cpSp.x, y:cpSp.y } : { x:Math.round(player.x + 80), y:Math.round(player.y + 70) }; if (cpSp) S.carDir = cpSp.dir; }
       // your crew holds its posts at your trap houses; the local licks get fresh wants
       placeEnforcers();
       dailyProg("visit", 1, d.id);
@@ -9839,7 +9986,7 @@
       spawnLicks();
       var plug = hoodPlug(d.id);
       log("Rode out to " + d.nick + " (" + d.name + "). (-" + money(d.fare) + " fare) — " + plug.name + " runs this corner here.", "");
-      toast(d.nick + " — " + d.tag + " " + plug.name + "'s block now.");
+      toast(d.nick + " — the bus drops you at the stop. " + d.tag + " " + plug.name + "'s block now.");
       if (shookTail){ toast("CLEAN GETAWAY — left " + leftNick + " behind. Heat's wiped, nobody followed you over."); sndGood(); }
       if (Math.random() < 0.3) rollEvent(d.id, false);
       // the road watches back: full pockets + loud clout attract jackboys on arrival
