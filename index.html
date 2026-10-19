@@ -4192,8 +4192,11 @@
         return { label:"Transit stop — ride to another district", run: openTravel, x: TRANSIT.x, y: TRANSIT.y };
       }
       // buildings — doors forgive: a wide step-up zone opens the prompt
+      // your whip wins whenever it is the closer thing: standing by the car in front of a door (the Justice Center after you're released) must get you in the car, not the building
+      var carD = S.car && S.carPos ? dist(p.x, p.y, S.carPos.x, S.carPos.y) : 1e9;
       for (var i=0;i<buildings.length;i++){
         var b = buildings[i], fp = frontDoorPoint(b), bp = backDoorPoint(b);
+        if (carD < 74 && carD <= dist(p.x, p.y, fp.x, fp.y) + 20) continue;
         if (dist(p.x, p.y, fp.x, fp.y) < 88){
           var act = buildingAction(b);
           if (act){ act.x = fp.x; act.y = fp.y; return act; }
@@ -5584,13 +5587,28 @@
     function aimAt(o, tx, ty, ms){ o.aimX = tx; o.aimY = ty; o.aimUntil = performance.now() + (ms || 900); o.face = tx >= o.x ? 1 : -1; }
     function fireAt(o, t){ aimAt(o, t.x, t.y, 900); o.kick = performance.now() + 120; fieldShot(o.x + (o.face || 1) * 22, o.y - 14, t.x, t.y - 18); try { playSfx("alertSoft"); } catch(e){} }
     function flinch(o, ms){ o.hitUntil = performance.now() + (ms || 500); }
-    function fieldShot(x1, y1, x2, y2){ fieldShots.push({ x1:x1, y1:y1, x2:x2, y2:y2, t:0.3, max:0.3 }); }
+    function fieldShot(x1, y1, x2, y2){ fieldShots.push({ x1:x1, y1:y1, x2:x2, y2:y2, t:0.34, max:0.34 }); }
     function drawFieldFx(){
       fieldShots.forEach(function(sh){
-        var a = clamp(sh.t / sh.max, 0, 1);
-        ctx.save(); ctx.globalAlpha = a * 0.4; ctx.strokeStyle = "#ffb703"; ctx.lineWidth = 6; ctx.beginPath(); ctx.moveTo(sh.x1, sh.y1); ctx.lineTo(sh.x2, sh.y2); ctx.stroke();
-        ctx.globalAlpha = a; ctx.strokeStyle = "#fff3b0"; ctx.lineWidth = 2.2; ctx.stroke();
-        ctx.fillStyle = "#fff7c2"; ctx.beginPath(); ctx.arc(sh.x1, sh.y1, 4 + 3 * a, 0, Math.PI * 2); ctx.fill(); ctx.restore();
+        var a = clamp(sh.t / sh.max, 0, 1), el = 1 - a, fly = clamp(el / 0.45, 0, 1), dx = sh.x2 - sh.x1, dy = sh.y2 - sh.y1, L = Math.sqrt(dx * dx + dy * dy) || 1, ux = dx / L, uy = dy / L;
+        var hx = sh.x1 + dx * fly, hy = sh.y1 + dy * fly, tl = Math.min(70, L * fly), tx = hx - ux * tl, ty = hy - uy * tl;
+        ctx.save(); ctx.lineCap = "round";
+        if (fly < 1 || el < 0.6){
+          var g = ctx.createLinearGradient(tx, ty, hx, hy); g.addColorStop(0, "rgba(255,183,3,0)"); g.addColorStop(1, "rgba(255,243,176,.95)");
+          ctx.strokeStyle = g; ctx.lineWidth = 3.2; ctx.beginPath(); ctx.moveTo(tx, ty); ctx.lineTo(hx, hy); ctx.stroke();
+          ctx.fillStyle = "#fff"; ctx.beginPath(); ctx.arc(hx, hy, 2.6, 0, Math.PI * 2); ctx.fill();
+        }
+        if (el < 0.4){   // muzzle flash: a bright cone along the barrel
+          var fa = 1 - el / 0.4; ctx.globalAlpha = fa; ctx.fillStyle = "#fff3b0";
+          ctx.beginPath(); ctx.moveTo(sh.x1, sh.y1); ctx.lineTo(sh.x1 + ux * 22 - uy * 7, sh.y1 + uy * 22 + ux * 7); ctx.lineTo(sh.x1 + ux * 22 + uy * 7, sh.y1 + uy * 22 - ux * 7); ctx.closePath(); ctx.fill();
+          ctx.fillStyle = "#ffb703"; ctx.beginPath(); ctx.arc(sh.x1 + ux * 6, sh.y1 + uy * 6, 6 + 5 * fa, 0, Math.PI * 2); ctx.fill();
+        }
+        if (fly >= 1){   // impact: a spark ring + a few chips
+          var ia = clamp(1 - (el - 0.45) / 0.55, 0, 1); ctx.globalAlpha = ia; ctx.strokeStyle = "#ffd23f"; ctx.lineWidth = 2;
+          ctx.beginPath(); ctx.arc(sh.x2, sh.y2, 4 + (1 - ia) * 14, 0, Math.PI * 2); ctx.stroke();
+          ctx.fillStyle = "#fff3b0"; for (var k = 0; k < 5; k++){ var an = k * 1.26 + sh.x2, rr1 = (1 - ia) * 18 + 3; ctx.fillRect(sh.x2 + Math.cos(an) * rr1, sh.y2 + Math.sin(an) * rr1, 2, 2); }
+        }
+        ctx.restore();
       });
       if (npcFight && npcFight.phase === 0){
         [npcFight.a.o, npcFight.b.o].forEach(function(n){ ctx.font = "20px sans-serif"; ctx.textAlign = "center"; ctx.fillText("💢", n.x, n.y - 62 + Math.sin(performance.now() / 120) * 2); });
@@ -5638,7 +5656,10 @@
         } else if (F.phase === 1){
           if (F.t > 0.6){
             var shooter = Math.random() < 0.5 ? F.a : F.b, victim = shooter === F.a ? F.b : F.a, shot = Math.random() < 0.4;   // sometimes it's just a shove and a lot of yelling
-            if (shot){ F.shooter = shooter; F.victim = victim; F.phase = 2; F.t = 0; F.vol = 0; F.volT = 0; aimAt(shooter.o, victim.o.x, victim.o.y, 4000); aimAt(victim.o, shooter.o.x, shooter.o.y, 4000); return; }
+            if (shot){ F.shooter = shooter; F.victim = victim; F.phase = 2; F.t = 0; F.vol = 0; F.volT = 0; aimAt(shooter.o, victim.o.x, victim.o.y, 4000); aimAt(victim.o, shooter.o.x, shooter.o.y, 4000);
+              var mxx = (shooter.o.x + victim.o.x) / 2, myy = (shooter.o.y + victim.o.y) / 2;   // everybody else on the block runs
+              licks.forEach(function(l2){ if (l2 === shooter.o || l2 === victim.o) return; var dd2 = dist(l2.x, l2.y, mxx, myy); if (dd2 < 380){ var ux2 = (l2.x - mxx) / (dd2 || 1), uy2 = (l2.y - myy) / (dd2 || 1); l2.tx = clamp(l2.x + ux2 * 420, 60, WORLD_W - 60); l2.ty = clamp(l2.y + uy2 * 260, 60, WORLD_H - 60); l2.wait = 0; l2.wt = 4; l2.spook = 4; } });
+              toast("SHOTS FIRED — " + shooter.o.name + " and " + victim.o.name + " are drawing on each other!", true); sndAlert(); return; }
             toast(F.a.o.name + " and " + F.b.o.name + " squared up, shoved, and walked off.", false);
             npcFight = null;
           }
@@ -5649,15 +5670,18 @@
           if (F.volT <= 0){
             var sh = F.shooter, vi = F.victim, last = F.vol >= 3;
             if (F.vol % 2 === 0 || last){ fireAt(sh.o, vi.o); if (last) flinch(vi.o, 700); } else { fireAt(vi.o, sh.o); }
-            addShake(3, 0.15); F.vol++; F.volT = 0.38;
+            burst((F.vol % 2 === 0 || last ? sh.o : vi.o).x, (F.vol % 2 === 0 || last ? sh.o : vi.o).y - 8, "#d4a017", 2, 70); addShake(3, 0.15); F.vol++; F.volT = 0.46;
             if (last){
-              burst(vi.o.x, vi.o.y - 12, "#ffd23f", 6, 130); addShake(4, 0.2);
-              var vn = vi.o.name || "Somebody", look = lookOfNpc(vi.o), vx = vi.o.x, vy = vi.o.y, hrs = rand(6, 16);
-              if (vi.kind === "lick"){ var li = licks.indexOf(vi.o); if (li >= 0) licks.splice(li, 1); } else { vi.o.busted = hrs * 60; }
-              sendAway(vn, "hospital", hrs, sh.o.name + " shot him", S.district, false);
-              toast(sh.o.name + " shot " + vn + " — down on the block.", true);
-              try { startOppAmbulance(look, vn, { x:vx, y:vy, sx:(vx > WORLD_W / 2 ? 1 : -1) }, "ambulance"); } catch(e){}
-              sh.o.aimUntil = 0; vi.o.aimUntil = 0; npcFight = null;
+              burst(vi.o.x, vi.o.y - 12, "#ffd23f", 8, 140); addShake(4, 0.2);
+              var vn = vi.o.name || "Somebody", look = lookOfNpc(vi.o), vx = vi.o.x, vy = vi.o.y, hrs = rand(6, 16), vo = vi.o, kind = vi.kind, sho = sh.o;
+              vo.downAt = performance.now(); vo.moving = false; vo.aimUntil = 0; sho.aimUntil = 0; npcFight = null;
+              toast(sho.name + " shot " + vn + " — he's down on the block.", true);
+              setTimeout(function(){   // let the fall play, then the medics take over
+                vo.downAt = 0;
+                if (kind === "lick"){ var li = licks.indexOf(vo); if (li >= 0) licks.splice(li, 1); } else { vo.busted = hrs * 60; }
+                sendAway(vn, "hospital", hrs, sho.name + " shot him", S.district, false);
+                try { startOppAmbulance(look, vn, { x:vx, y:vy, sx:(vx > WORLD_W / 2 ? 1 : -1) }, "ambulance"); } catch(e){}
+              }, 900);
             }
           }
         }
@@ -7637,7 +7661,9 @@
       { tier:3, name:"Heavy Piece",    price:700,  bonus:0.48, crit:0.06, needTier:0, blurb:"+48% · adds HEAVY BLAST — jackboys write songs about it" },
       { tier:4, name:"Street Sweeper", price:1200, bonus:0.52, crit:0.06, needTier:1, blurb:"+52% · adds SCATTER, a shotgun blast · Hustlers and up" },
       { tier:5, name:"Switch SMG",     price:2200, bonus:0.58, crit:0.05, needTier:2, blurb:"+58% · adds SPRAY, a 3-round burst · Bosses and up" },
-      { tier:6, name:"Hood Rifle",     price:3800, bonus:0.66, crit:0.10, needTier:3, blurb:"+66% · adds BURST FIRE and the best crit chance · Kingpins only" }
+      { tier:6, name:"Hood Rifle",     price:3800, bonus:0.66, crit:0.10, needTier:3, blurb:"+66% · adds BURST FIRE and the best crit chance · Kingpins only" },
+      { tier:7, name:"Gold Desert Eagle", price:6500, bonus:0.70, crit:0.16, needTier:3, blurb:"+70% · adds EXECUTE, a huge gold slug with the biggest crit · Kingpins only" },
+      { tier:8, name:"Kingpin Reaper", price:12000, bonus:0.76, crit:0.08, needTier:3, blurb:"+76% · adds MAG DUMP, five rounds in one pull · Kingpins only" }
     ];
     function gunCrit(){ var g = GUNS[S.gunTier - 1]; return g ? g.crit : 0; }
     function gunBonus(){ var g = GUNS[S.gunTier - 1]; return g ? g.bonus : 0; }
@@ -8270,7 +8296,11 @@
       var b = buildingById("landmark");
       player.x = b.door.x; player.y = b.door.y + (doorFacesSouth(b) ? 36 : -36); player.vx = 0; player.vy = 0;
       camPos.x = null; carRoll = null;
-      if (S.car){ var sp = nearestPullSpot(player.x, player.y, 900); S.carPos = sp ? { x:sp.x, y:sp.y } : { x:Math.round(player.x + 70), y:Math.round(player.y) }; if (sp) S.carDir = sp.dir; }
+      if (S.car){ var sp = nearestPullSpot(player.x, player.y, 900); S.carPos = sp ? { x:sp.x, y:sp.y } : { x:Math.round(player.x + 70), y:Math.round(player.y) }; if (sp) S.carDir = sp.dir;
+        // you wake up beside your whip: step off the door toward it so the prompt is 'Get in', not the building
+        var wdx = S.carPos.x - player.x, wdy = S.carPos.y - player.y, wd = Math.sqrt(wdx * wdx + wdy * wdy);
+        if (wd > 60){ player.x += wdx / wd * Math.min(wd - 40, 110); player.y += wdy / wd * Math.min(wd - 40, 110); try { ejectFromSolids(player); } catch(e){} }
+      }
     }
     /* ---- DOWN: an ambulance with two medics comes to you, loads you up, then a white flash and you wake at Christ Hospital ---- */
     var rescue = null;
@@ -9144,7 +9174,8 @@
       if (a.total > 40){ oppAmb = null; return; }   // failsafe: a pickup scene that can't finish (blocked route, anything) must never hold the whole game hostage — it blocked hits, tows and encounters
       a.t += dt;
       if (a.phase === 0){
-        if (towFollow(a.car, 470, dt)){ a.phase = 1; a.t = 0; var rr0 = ambRear(a.car); a.st = { x:rr0.x, y:rr0.y, moving:false, face:1 }; }
+        var ambSc = typeof camView !== "undefined" && camView && a.car.x > camView.x - 100 && a.car.x < camView.x + camView.w + 100 && a.car.y > camView.y - 100 && a.car.y < camView.y + camView.h + 100;
+        if (towFollow(a.car, ambSc ? 470 : 880, dt)){ a.phase = 1; a.t = 0; var rr0 = ambRear(a.car); a.st = { x:rr0.x, y:rr0.y, moving:false, face:1 }; }
         a.medics.forEach(function(m){ m.x = a.car.x; m.y = a.car.y; });
       } else if (a.phase === 1){
         if (stretcherMove(a.st, a.victim.x, a.victim.y + 30, 140, dt)){ a.phase = 2; a.t = 0; }
@@ -9158,7 +9189,8 @@
         if (stretcherMove(a.st, rear.x, rear.y, 110, dt)){ a.phase = 4; a.t = 0; a.hiddenIn = true; a.car.route = towRoute({ x:a.car.x, y:a.car.y }, a.entry); }
         stretcherMedics(a.st, a.medics, dt);
       } else {
-        if (a.t > 0.8 && towFollow(a.car, 520, dt) || a.t > 25) oppAmb = null;
+        var ambSc2 = typeof camView !== "undefined" && camView && a.car.x > camView.x - 100 && a.car.x < camView.x + camView.w + 100 && a.car.y > camView.y - 100 && a.car.y < camView.y + camView.h + 100;
+        if (a.t > 0.8 && towFollow(a.car, ambSc2 ? 520 : 950, dt) || a.t > 25) oppAmb = null;
       }
     }
     function drawOppAmb(list){
@@ -9187,11 +9219,18 @@
        Medics carry a stretcher out of the ambulance, lift the patient onto it (blanket, pillow), and carry it to the rear doors. */
     function ambRear(car){ var d = car.dir | 0, o = d === 0 ? [-74, 0] : d === 2 ? [74, 0] : d === 1 ? [0, -74] : [0, 74]; return { x:car.x + o[0], y:car.y + o[1] }; }
     /* the stretcher team walks AROUND buildings and fences (same obstacle-aware steering the cops use) instead of straight through them; if a leg takes too long it just gets there */
+    /* the stretcher team walks around buildings with the same steering the cops use, but with a SLIM body (the medics trail beside it, they don't need clearance) and a hard anti-stick rule:
+       if it has made no real progress for a second it hops a step straight at the target, and any leg over 3.5 s simply completes — a pickup can never stall */
     function stretcherMove(st, tx, ty, sp, dt){
-      if (!st._k || st._k.x !== tx || st._k.y !== ty){ st._k = { x:tx, y:ty }; st._legT = 0; }
-      st._legT += dt; if (st.r == null){ st.r = 22; st.walk = 0; }
-      if (st._legT > 7){ st.x = tx; st.y = ty; st.moving = false; return true; }
+      if (!st._k || st._k.x !== tx || st._k.y !== ty){ st._k = { x:tx, y:ty }; st._legT = 0; st._pt = 0; st._px = st.x; st._py = st.y; }
+      st._legT += dt; if (st.r == null || st.r > 11){ st.r = 10; st.walk = 0; }
+      if (st._legT > 3.5){ st.x = tx; st.y = ty; st.moving = false; return true; }
       var px = st.x, arrived = chaseStep(st, tx, ty, sp, dt, 6);
+      st._pt += dt;
+      if (st._pt >= 1){
+        if (Math.hypot(st.x - st._px, st.y - st._py) < 18 && !arrived){ var dd = Math.hypot(tx - st.x, ty - st.y) || 1, hop = Math.min(dd, 46); st.x += (tx - st.x) / dd * hop; st.y += (ty - st.y) / dd * hop; st._wp = null; st._sideT = 0; st._backT = 0; }
+        st._pt = 0; st._px = st.x; st._py = st.y;
+      }
       st.moving = !arrived; if (st.x !== px) st.face = st.x > px ? 1 : -1;
       return arrived;
     }
@@ -10036,10 +10075,12 @@
       3:{ glyph:"●", color:"#fb923c", size:30, ms:270, recoil:18, muzzle:"💥", flash:"#fed7aa", shake:true },    // Heavy Piece — slow orange slug
       4:{ glyph:"•", color:"#f87171", size:17, ms:230, recoil:16, muzzle:"💥", flash:"#fee2e2", pellets:5 },     // Street Sweeper — red pellet fan
       5:{ glyph:"━", color:"#22d3ee", size:17, ms:140, recoil:4,  muzzle:"✦", rounds:4, gap:55 },               // Switch SMG — rapid cyan tracers
-      6:{ glyph:"➖", color:"#ef4444", size:28, ms:150, recoil:12, muzzle:"💥", flash:"#fecaca", scope:true }     // Hood Rifle — long red tracer + scope ping
+      6:{ glyph:"➖", color:"#ef4444", size:28, ms:150, recoil:12, muzzle:"💥", flash:"#fecaca", scope:true },    // Hood Rifle — long red tracer + scope ping
+      7:{ glyph:"●", color:"#fbbf24", size:36, ms:210, recoil:24, muzzle:"💥", flash:"#fef3c7", shake:true, scope:true },   // Gold Desert Eagle — one fat gold slug
+      8:{ glyph:"━", color:"#f97316", size:20, ms:120, recoil:8, muzzle:"🔥", rounds:7, gap:45, flash:"#ffedd5" }          // Kingpin Reaper — rolling orange tracers
     };
     function fxGun(from, to, dir, tier, done){
-      var g = GUNFX[clamp(tier || 2, 1, 6)], i;
+      var g = GUNFX[clamp(tier || 2, 1, 8)], i;
       if (g.rounds){
         for (i = 0; i < g.rounds; i++){ (function(k){ fxAfter(k * g.gap, function(){ fxRecoil(from, dir, g.recoil); fxMuzzle(from, dir, g.muzzle); fxShot(from, to, g.glyph, { ms:g.ms, size:g.size, color:g.color, dy1:(k % 3 - 1) * 10 }); }); })(i); }
         fxAfter(g.rounds * g.gap + g.ms, done); return;
@@ -10063,6 +10104,8 @@
       else if (kind === "blast"){ fxRecoil(from, dir, 20); fxFlash("#ffedd5", 260); fxMuzzle(from, dir, "💥"); fxShot(from, to, "🔥", { ms:320, size:44, grow:1.6, ease:"ease-in", color:"#fb923c" }); fxAfter(120, fxArenaShake); fxAfter(360, function(){ fxFlash("#fb923c", 260); fxArenaShake(); done(); }); }
       else if (kind === "scatter"){ fxRecoil(from, dir, 16); fxFlash("#fef3c7", 200); fxMuzzle(from, dir, "💥"); [-34, -17, 0, 17, 34].forEach(function(dy){ fxShot(from, to, "•", { ms:230, dy1:dy, size:18, grow:1.3, color:"#f87171" }); }); fxAfter(120, fxArenaShake); fxAfter(280, done); }
       else if (kind === "spray"){ for (i = 0; i < 6; i++){ (function(k){ fxAfter(k * 70, function(){ if (k % 2 === 0) fxRecoil(from, dir, 5); fxMuzzle(from, dir, "✦"); fxShot(from, to, "━", { ms:150, dy1:(k % 3 - 1) * 16, size:17, color:"#22d3ee" }); }); })(i); } fxAfter(560, done); }
+      else if (kind === "deagle"){ fxRecoil(from, dir, 26); fxFlash("#fef3c7", 260); fxMuzzle(from, dir, "💥"); fxFloat(to, "🎯", "#fbbf24"); fxShot(from, to, "●", { ms:210, size:40, color:"#fbbf24", grow:1.7 }); fxAfter(150, fxArenaShake); fxAfter(240, function(){ fxFlash("#fbbf24", 240); fxArenaShake(); done(); }); }
+      else if (kind === "dump"){ fxFlash("#ffedd5", 200); for (i = 0; i < 8; i++){ (function(k){ fxAfter(k * 55, function(){ fxRecoil(from, dir, 5); fxMuzzle(from, dir, k % 2 ? "🔥" : "✦"); fxShot(from, to, "━", { ms:130, dy1:(k % 4 - 1.5) * 12, size:20, color:"#f97316" }); if (k % 3 === 2) fxArenaShake(); }); })(i); } fxAfter(620, done); }
       else if (kind === "burst"){ for (i = 0; i < 3; i++){ (function(k){ fxAfter(k * 90, function(){ fxRecoil(from, dir, 7); fxMuzzle(from, dir, "💥"); fxShot(from, to, "➖", { ms:140, dy1:(k - 1) * 8, size:28, color:"#ef4444" }); }); })(i); } fxAfter(420, done); }
       else if (kind === "shot"){ fxFloat(from, "💥", "#fff"); fxProj(from, to, "•", 220); fxAfter(240, done); }
       else if (kind === "beam"){ fxFlash("#a78bfa", 300); fxShot(from, to, "✨", { ms:300, size:40, grow:1.5 }); fxShot(from, to, "⚡", { ms:260, delay:60, size:30, dy1:-14 }); fxShot(from, to, "⚡", { ms:260, delay:90, size:30, dy1:14 }); fxArenaShake(); fxAfter(360, done); }
@@ -10080,7 +10123,10 @@
       if (S.gunTier >= 4) spec.push({ tier:4, id:"scatter", name:"SCATTER", dmg:[28, 38], acc:0.8, anim:"scatter", verb:"let the Street Sweeper rip", ammo:"scatter", sub:f.ammo.scatter + " shells — wide blast", off:f.ammo.scatter <= 0 });
       if (S.gunTier >= 5) spec.push({ tier:5, id:"spray", name:"SPRAY", dmg:[8, 11], hits:3, acc:0.7, anim:"spray", verb:"spray the Switch", ammo:"spray", sub:f.ammo.spray + " mags — three rounds", off:f.ammo.spray <= 0 });
       if (S.gunTier >= 6) spec.push({ tier:6, id:"burst", name:"BURST FIRE", dmg:[19, 25], hits:2, acc:0.8, anim:"burst", verb:"burst the Hood Rifle", ammo:"burst", sub:f.ammo.burst + " bursts — two hard hits", off:f.ammo.burst <= 0 });
-      spec.sort(function(x, y){ return y.tier - x.tier; }).slice(0, 3).forEach(function(mv){ m.push(mv); });
+      if (S.gunTier >= 7) spec.push({ tier:7, id:"deagle", name:"EXECUTE", dmg:[46, 60], acc:0.72, anim:"deagle", verb:"put the Gold Eagle on him", ammo:"deagle", sub:f.ammo.deagle + " left — the biggest single shot", off:f.ammo.deagle <= 0 });
+      if (S.gunTier >= 8) spec.push({ tier:8, id:"dump", name:"MAG DUMP", dmg:[7, 10], hits:5, acc:0.7, anim:"dump", verb:"empty the Reaper", ammo:"dump", sub:f.ammo.dump + " mags — five rounds", off:f.ammo.dump <= 0 });
+      // a better gun means MORE attacks: 3 specials up to the rifle, 4 at the rifle, then one more for each Kingpin gun
+      spec.sort(function(x, y){ return y.tier - x.tier; }).slice(0, 3 + Math.max(0, Math.min(3, (S.gunTier | 0) - 5))).forEach(function(mv){ m.push(mv); });
       if (S.gunTier >= 1) m.push({ id:"shoot", name:"SHOOT", dmg:[17, 22], acc:0.86, anim:"shoot", verb:"shoot", ammo:"shoot", sub:f.ammo.shoot + " rounds — steady", off:f.ammo.shoot <= 0 });
       m.push({ id:"jab", name:"JAB", dmg:[9, 13], acc:0.95, anim:"jab", verb:"jab", sub:"Quick — rarely misses" });
       if (!S.gunTier) m.push({ id:"hook", name:"HOOK", dmg:[17, 25], acc:0.68, anim:"hook", verb:"swing a hook", sub:"Big swing — can miss" });
@@ -10091,7 +10137,7 @@
     function startFight(cfg){
       var base = clamp((cfg.p || 0.45) - gunBonus() - (S.spaceGun ? spaceBonus() : 0), 0.15, 0.8);   // gun odds now come from your MOVES, not a bonus
       var crewN0 = S.crew ? S.crew.enforcers : 0, rank0 = S.tierIdx || 0, car0 = S.car ? carById(S.car) : null, pmax0 = 100 + rank0 * 5 + crewN0 * 3 + ((car0 && car0.fightHp) || 0);   /* rank, enforcers and an armored whip all toughen you */
-      var f = { cfg:cfg, pMax:pmax0, pHp:pmax0, crewN:crewN0, dmgMult:1 + 0.025 * rank0, oMax:Math.round((64 + (1 - base) * 36) * (1 + 0.06 * rank0)), oDmg:Math.round((9 + (1 - base) * 25) * (1 + 0.05 * rank0)), guard:false, stunned:false, busy:false, over:false, round:1, ammo:{ shoot:7, double:3, blast:2, scatter:3, spray:2, burst:3 }, log:"" };
+      var f = { cfg:cfg, pMax:pmax0, pHp:pmax0, crewN:crewN0, dmgMult:1 + 0.025 * rank0, oMax:Math.round((64 + (1 - base) * 36) * (1 + 0.06 * rank0)), oDmg:Math.round((9 + (1 - base) * 25) * (1 + 0.05 * rank0)), guard:false, stunned:false, busy:false, over:false, round:1, ammo:{ shoot:7, double:3, blast:2, scatter:3, spray:2, burst:3, deagle:2, dump:2 }, log:"" };
       f.oppGun = enemyGunTier(cfg); f.oppWeapon = ENEMY_GUNS[f.oppGun];
       var easeM = (ENEMY_EASE[cfg.oppEmoji] || 1) * (rank0 === 0 ? 0.9 : 1);
       f.oDmg = Math.round(f.oDmg * (1 + 0.03 * f.oppGun) * easeM); f.oMax = Math.round(f.oMax * (1 + 0.02 * f.oppGun) * (0.5 + 0.5 * easeM));   // a better weapon hits harder and means a tougher customer
@@ -10100,7 +10146,7 @@
         // scatter / spray / burst reach several of them, so a good gun is the difference between killing the crew and being carried out
         var gb = 0.55;   // a crew fight is tuned on its own (the stop's odds number doesn't apply): ~10 dmg a shooter, ~65 HP each
         f.oMax = Math.round((64 + (1 - gb) * 36) * (1 + 0.06 * rank0) * 0.68 * (1 + 0.02 * f.oppGun));
-        f.oppGun = Math.min(f.oppGun, (S.gunTier | 0) + 1); f.oppWeapon = ENEMY_GUNS[f.oppGun];   // three shooters at once: their guns stay within a notch of yours
+        f.oppGun = Math.min(6, f.oppGun, (S.gunTier | 0) + 1); f.oppWeapon = ENEMY_GUNS[f.oppGun];   // three shooters at once: their guns stay within a notch of yours
         f.oDmg = Math.round((9 + (1 - gb) * 25) * (1 + 0.05 * rank0) * 0.38 * (1 + 0.03 * f.oppGun));
         f.group = cfg.group.map(function(g){ return { name:g.name, hp:f.oMax, max:f.oMax, alive:true }; });
         f.cur = 0; cfg.oppName = f.group[0].name;
@@ -10174,6 +10220,8 @@
       function hitG(g, mult){ var d = dmgRoll(mult); g.hp = Math.max(0, g.hp - d); hitsOn[g.name] = (hitsOn[g.name] || 0) + d; total += d; }
       if (m.id === "scatter"){ aliveG.forEach(function(g){ if (Math.random() < m.acc) hitG(g, 0.8); }); }
       else if (m.id === "spray"){ for (var i = 0; i < 3; i++) if (Math.random() < m.acc) hitG(aliveG[randi(0, aliveG.length - 1)], 1); }
+      else if (m.id === "deagle"){ hitG(tgt, 1); if (Math.random() < 0.5){ var oth = aliveG.filter(function(g){ return g !== tgt; })[0]; if (oth) hitG(oth, 0.4); } }
+      else if (m.id === "dump"){ for (var d5 = 0; d5 < 5; d5++) if (Math.random() < m.acc) hitG(d5 < 3 ? tgt : aliveG[randi(0, aliveG.length - 1)], 1); }
       else if (m.id === "burst"){ for (var j = 0; j < 2; j++) if (Math.random() < m.acc) hitG(j === 0 ? tgt : (aliveG.filter(function(g){ return g !== tgt; })[0] || tgt), 1); }
       else { var nh = m.hits || 1; for (var k = 0; k < nh; k++) if (Math.random() < m.acc) hitG(tgt, 1); }
       if (total > 0){
@@ -13297,7 +13345,16 @@
       if ((e.kick || 0) > performance.now()){ ctx.fillStyle = "#fff3b0"; ctx.beginPath(); ctx.arc(gx + ux * 6, gy + uy * 6, 6, 0, Math.PI * 2); ctx.fill(); ctx.fillStyle = "#ffb703"; ctx.beginPath(); ctx.arc(gx + ux * 6, gy + uy * 6, 3.2, 0, Math.PI * 2); ctx.fill(); }
       ctx.restore();
     }
+    /* a man who got hit folds: he tips over sideways over about half a second */
     function drawPerson(e, o){
+      var dn = e.downAt;
+      if (dn){
+        var k = clamp((performance.now() - dn) / 500, 0, 1), ang = (e.face >= 0 ? -1 : 1) * (Math.PI / 2) * (1 - Math.pow(1 - k, 3));
+        ctx.save(); ctx.translate(e.x, e.y + 24); ctx.rotate(ang); ctx.translate(-e.x, -(e.y + 24)); drawPersonBase(e, o); ctx.restore(); return;
+      }
+      drawPersonBase(e, o);
+    }
+    function drawPersonBase(e, o){
       // JET SET RADIO pass: lanky proportions, streetwear, big sneakers.
       // Top-down Pokémon camera, but everybody reads as a PERSON.
       var moving = !!e.moving;
