@@ -7102,9 +7102,16 @@
       var fsH = clamp(tw * 0.085, 10, 34);
       var ly = tw > 215 ? a.y + th * 0.04 + fsH * 0.7 : a.y + th * 0.5;
       mHalo(d.nick, a.x + tw / 2, ly, fsH, "#fff", "rgba(10,14,22,.85)");
-      if (mapSt.travel && !cur){ var fareTxt = drivePick ? "ROLL FREE" : (funds() < d.fare ? "HITCH · free" : "$" + d.fare) + " · ~" + (funds() < d.fare ? d.mins * 2 : d.mins) + " min"; mHalo(fareTxt, a.x + tw / 2, ly + fsH * 1.05, clamp(tw * 0.04, 9, 15), "#bbf7d0", "rgba(10,14,22,.9)"); }
+      if (d.mp){   // Winton Terrace is the multiplayer race hood — say so on the map, in a bold pink banner under the name
+        var mpFs = clamp(tw * 0.05, 9, 18), mpY = ly + fsH * 1.1;
+        ctx2.save(); ctx2.font = "900 " + mpFs + "px Nunito, sans-serif"; var mpW = ctx2.measureText("🏁 MULTIPLAYER").width + mpFs * 1.2;
+        ctx2.fillStyle = "#ff5d8f"; ctx2.strokeStyle = "#fff"; ctx2.lineWidth = 2.5; ctx2.beginPath(); if (ctx2.roundRect) ctx2.roundRect(a.x + tw / 2 - mpW / 2, mpY - mpFs * 0.95, mpW, mpFs * 1.5, mpFs * 0.5); else ctx2.rect(a.x + tw / 2 - mpW / 2, mpY - mpFs * 0.95, mpW, mpFs * 1.5); ctx2.fill(); ctx2.stroke(); ctx2.restore();
+        mHalo("🏁 MULTIPLAYER", a.x + tw / 2, mpY, mpFs, "#fff", "rgba(90,10,40,.9)");
+        if (tw > 140) mHalo("RACK RACE · 2–4 players · bots fill in", a.x + tw / 2, mpY + mpFs * 1.6, clamp(tw * 0.036, 8, 12), "#ffd1e0", null, 800);
+      }
+      if (mapSt.travel && !cur && !d.mp){ var fareTxt = drivePick ? "ROLL FREE" : (funds() < d.fare ? "HITCH · free" : "$" + d.fare) + " · ~" + (funds() < d.fare ? d.mins * 2 : d.mins) + " min"; mHalo(fareTxt, a.x + tw / 2, ly + fsH * 1.05, clamp(tw * 0.04, 9, 15), "#bbf7d0", "rgba(10,14,22,.9)"); }
       if (mapSt.travel && mapSt.sel === id){ ctx2.strokeStyle = "#ffd23f"; ctx2.lineWidth = Math.max(4, tw * 0.016); hoodPath(id); ctx2.stroke(); ctx2.fillStyle = "rgba(255,210,63,.14)"; ctx2.fill(); }
-      if (tw <= 215){ if (badges) mHalo(badges, a.x + tw / 2, ly + fsH * 0.95, fsH * 0.7, "#fff"); if (tw > 110) mHalo(hoodKingpin(id).name, a.x + tw / 2, ly + fsH * 1.8, clamp(tw * 0.04, 8, 12), "#ffd23f", null, 800); }
+      if (tw <= 215){ if (badges) mHalo(badges, a.x + tw / 2, ly + fsH * 0.95, fsH * 0.7, "#fff"); if (tw > 110 && !d.mp) mHalo(hoodKingpin(id).name, a.x + tw / 2, ly + fsH * 1.8, clamp(tw * 0.04, 8, 12), "#ffd23f", null, 800); }
       else if (badges) mHalo(badges, a.x + tw / 2, ly + fsH * 0.9, fsH * 0.6, "#fff");
       if (cur){
         var pp = hs(player.x, player.y), pul = 0.5 + 0.5 * Math.sin(performance.now() / 260), pr = clamp(tw * 0.018, 6, 11);
@@ -7170,7 +7177,7 @@
     }
     function mapGoUpdate(){
       var gb = document.getElementById("mapGo"); if (!gb) return;
-      if (mapSt.travel && mapSt.sel && mapSt.sel !== S.district){ var dd = districtById(mapSt.sel); gb.style.display = "block"; gb.textContent = (drivePick ? "ROLL TO " : "RIDE TO ") + dd.nick + (drivePick ? " — FREE" : " — " + (funds() < dd.fare ? "HITCH" : "$" + dd.fare)); }
+      if (mapSt.travel && mapSt.sel && mapSt.sel !== S.district){ var dd = districtById(mapSt.sel); gb.style.display = "block"; gb.textContent = dd.mp ? "🏁 ENTER THE T — MULTIPLAYER RACE" : (drivePick ? "ROLL TO " : "RIDE TO ") + dd.nick + (drivePick ? " — FREE" : " — " + (funds() < dd.fare ? "HITCH" : "$" + dd.fare)); }
       else gb.style.display = "none";
     }
     function mapTap(sx, sy){
