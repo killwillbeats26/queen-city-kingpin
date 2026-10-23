@@ -5625,25 +5625,36 @@
     function lookOfNpc(n){ return { skin:n.skin, shirt:n.shirt, pants:n.pants, hair:n.hair, accent:n.accent, shoes:n.shoes }; }
     function crewGuards(){ return enforcers.filter(function(e){ return !e.postHood || e.postHood === S.district; }); }
     function crewDefense(dt){
-      _defT += dt; if (_defT < 0.7) return; _defT = 0;
-      var th = S.traps && S.traps[S.district]; if (!th || !th.owned) return;
+      _defT += dt; if (_defT < 0.3) return; _defT = 0;
+      var th = S.traps && S.traps[S.district], escorting = escortOn() && S.escortHood === S.district;
+      if ((!th || !th.owned) && !escorting) return;   // your trap house, or the crew you called to your side
       if (!(S.crew && S.crew.enforcers > 0)) return;
-      var guards = crewGuards(); if (!guards.length) return;
-      var td = buildingById("traphouse"); if (!td || !td.door) return;
+      var guards = escorting ? enforcers.slice() : crewGuards(); if (!guards.length) return;
+      var td = buildingById("traphouse"); if (!td || !td.door) td = { door:{ x:player.x, y:player.y } };
       var tgt = null, kind = "";
-      if (S.jackboy && !S.jackboy._def && dist(S.jackboy.x, S.jackboy.y, td.door.x, td.door.y) < 300 && inView(S.jackboy.x, S.jackboy.y, -30)){ tgt = S.jackboy; kind = "jack"; }
-      else if (driveby && !driveby._def && dist(driveby.x, driveby.y, td.door.x, td.door.y) < 340 && inView(driveby.x, driveby.y, -30)){ tgt = driveby; kind = "driveby"; }
+      /* ANY attacker that comes within range of the trap while you are being chased gets shot — no dice roll. Range = near the door or near any guard. */
+      function near(o){
+        if (!o || o._def || o.downAt || !inView(o.x, o.y, 60)) return false;
+        if (dist(o.x, o.y, td.door.x, td.door.y) < 420) return true;
+        for (var gi = 0; gi < guards.length; gi++) if (dist(o.x, o.y, guards[gi].x, guards[gi].y) < 380) return true;
+        // you ran home with him on your tail: anyone chasing you inside the crew's ground gets lit up
+        if (dist(player.x, player.y, td.door.x, td.door.y) < 340 && dist(o.x, o.y, player.x, player.y) < 380) return true;
+        return false;
+      }
+      if (near(S.jackboy)){ tgt = S.jackboy; kind = "jack"; }
+      else if (plugVan && plugVan.active && plugVan.crew.some(near)){ tgt = plugVan.crew.filter(near)[0]; kind = "van"; }
+      else if (driveby && near(driveby)){ tgt = driveby; kind = "driveby"; }
       if (!tgt) return;
-      tgt._def = true;   // one roll per attacker
+      tgt._def = true;   // one firefight per attacker
       var n = Math.min(3, guards.length);
-      if (Math.random() > 0.35 + 0.1 * n){ if (kind === "jack") toast("Your crew's watching the trap — " + (S.jackboy.name || "he") + " is out of their range."); return; }
       var sx = tgt.x > WORLD_W / 2 ? 1 : -1, shooters = guards.slice(0, n), VOL = 7, jk = kind === "jack" ? S.jackboy : null;
-      toast("YOUR CREW OPENS UP — " + (kind === "jack" ? (jk.name || "the jackboy") : "the drive-by") + " is in their sights!", true); sndAlert();
+      toast("YOUR CREW OPENS UP — " + (kind === "jack" ? (jk.name || "the jackboy") : kind === "van" ? "the van's jackboys" : "the drive-by") + " are in their sights!", true); sndAlert();
       shooters.forEach(function(g2){ aimAt(g2, tgt.x, tgt.y, 3600); });
       /* a real firefight, a notch below the Kingpin scene: every guard fires a staggered volley (7 rounds each-ish), the target flinches on each hit, flashes and shake build, then he drops */
       (function vol(i){
-        if (kind === "jack" ? (S.jackboy !== jk) : (driveby !== tgt)){ shooters.forEach(function(g2){ g2.aimUntil = 0; }); return; }   // he's gone (caught, beamed away...): stand down
+        if (kind === "jack" ? (S.jackboy !== jk) : kind === "van" ? !(plugVan && plugVan.crew.indexOf(tgt) >= 0) : (driveby !== tgt)){ shooters.forEach(function(g2){ g2.aimUntil = 0; }); return; }   // he's gone (caught, beamed away...): stand down
         if (jk){ jk.stagger = Math.max(jk.stagger || 0, 1.2); jk.speed = 0; }
+        if (kind === "van") tgt._frozen = true;
         shooters.forEach(function(g2, gi){ setTimeout(function(){ aimAt(g2, tgt.x, tgt.y, 1500); fireAt(g2, tgt); if (gi === 0 || i % 2) burst(tgt.x + rand(-10, 10), tgt.y - 12, "#ffd23f", 3, 110); }, gi * 90); });
         if (i % 2 === 0) flinch(tgt, 380); addShake(i >= VOL - 2 ? 5 : 2.5, 0.18);
         if (i + 1 < VOL){ setTimeout(function(){ vol(i + 1); }, 330); return; }
@@ -5658,6 +5669,18 @@
               jk.downAt = 0; jackGone(120); sendAway(nm, "hospital", rand(24, 48), "dropped by your crew outside the trap", S.district, true);
               addClout(2, "your crew dropped " + nm); toast("Your crew dropped " + nm + " outside the trap. Medics are coming.");
               try { startOppAmbulance(look, nm, { x:jx, y:jy, sx:sx }, "ambulance"); } catch(e){}
+            }, 1000);
+          } else if (kind === "van"){
+            if (!(plugVan && plugVan.crew.indexOf(tgt) >= 0)) return;
+            var vlook = lookOfNpc(tgt), vx2 = tgt.x, vy2 = tgt.y;
+            bumpStat("kills", 1); tgt.downAt = performance.now(); tgt.moving = false; burst(vx2, vy2 - 12, "#e63946", 8, 150); addShake(6, 0.3);
+            setTimeout(function(){
+              var pv = plugVan; if (!pv) return;
+              var ci = pv.crew.indexOf(tgt); if (ci >= 0) pv.crew.splice(ci, 1); tgt.downAt = 0; pv.killed = (pv.killed | 0) + 1;
+              addClout(2, "your crew dropped one of the plug van's jackboys");
+              try { startOppAmbulance(vlook, "Jackboy", { x:vx2, y:vy2, sx:sx }, "ambulance"); } catch(e){}
+              if (pv.killed >= 3 || (!pv.crew.length && pv.exited >= 3)){ toast("Your crew put the whole van down — the package is safe."); plugVanLost(); }
+              else toast("One of the van's jackboys is down — " + pv.crew.length + " left.");
             }, 1000);
           } else {
             if (driveby !== tgt) return;
@@ -7437,6 +7460,7 @@
       var V = plugVan; if (!V || !V.active) return;
       if (V.hood !== S.district || S.holedUp || S.ghostTime > 0){ plugVan = null; return; }
       if (battleState || dialogue || menu || rescue) return;
+      if (V.holdT > 0){ V.holdT -= dt; return; }   // just broke away from them: a beat of head start
       V.chaseT += dt; V.planT -= dt;
       var locked = V.chaseT < CRUISER_MIN_CHASE, vcr = { x:V.x, y:V.y, route:V.route, dir:V.dir, hx:V.hx, hy:V.hy };
       function drive(sp){ var px = V.x, py = V.y, done = towFollow(V, sp, dt), dd = dist(px, py, V.x, V.y), lim = sp * dt * 1.01; if (dd > lim){ V.x = px + (V.x - px) * lim / dd; V.y = py + (V.y - py) * lim / dd; } return done; }
@@ -7456,7 +7480,7 @@
         V.phase = "chase";
         if (V.planT <= 0 || !V.route.length){ V.route = towRoute(V, nearestRoadPoint(player.x, player.y)); V.planT = 1.0; }
         drive(CRUISER_SPEED);
-        if (dist(V.x, V.y, player.x, player.y) < 72 && S.battleCd <= 0){ plugVanEnd("", true); return; }
+        if (dist(V.x, V.y, player.x, player.y) < 72 && S.battleCd <= 0){ plugVanCatch(V); return; }
         if (dist(V.x, V.y, player.x, player.y) > 1100){ V.farT += dt; if (V.farT >= 6 && !locked){ plugVanLost(); return; } } else V.farT = 0;
         if (V.chaseT > CRUISER_MIN_CHASE + 25){ plugVanLost(); }
         return;
@@ -7477,12 +7501,36 @@
       V.crew.forEach(function(o){
         var d = dist(o.x, o.y, player.x, player.y), tx = player.x, ty = player.y;
         if (o.flank && d > 240){ var ux = (player.x - o.x) / d, uy = (player.y - o.y) / d; tx = clamp(player.x - uy * o.flank * 240, 40, WORLD_W - 40); ty = clamp(player.y + ux * o.flank * 240, 40, WORLD_H - 40); }
-        chaseStep(o, tx, ty, 195, dt, 6);
-        if (d < nearest) nearest = d; if (d < 34) caught = true;
+        if (!o._frozen) chaseStep(o, tx, ty, 195, dt, 6);
+        if (d < nearest) nearest = d; if (d < 34 && !o._frozen && !o.downAt) caught = true;
       });
-      if (caught && S.battleCd <= 0){ plugVanEnd("", true); return; }
+      if (caught && S.battleCd <= 0){ plugVanCatch(V); return; }
       if (V.crew.length && nearest > 470){ V.escT += dt; if (V.escT >= 2.5 && !locked){ plugVanLost(); return; } } else V.escT = 0;
       if (V.chaseT > CRUISER_MIN_CHASE + 25){ plugVanLost(); }
+    }
+    /* the van's jackboys got to you: no instant loss — it is a real fight against ALL of them (or a run from all of them) */
+    var VAN_NAMES = ["Dre Dre", "Lil Twan", "Big Mook"];
+    function plugVanCatch(V){
+      if (battleState || !V || !V.active) return;
+      var live = [], left = 3 - (V.killed | 0);   // all three of the van's crew are in it, whoever has stepped out so far
+      for (var vi2 = 0; vi2 < left; vi2++) live.push({ name:VAN_NAMES[vi2 % 3] });
+      if (!live.length){ plugVanLost(); return; }
+      var grp = live.map(function(o, i){ return { name:o.name && o.name !== "JACKBOY" ? o.name : VAN_NAMES[i % 3] }; }), n = grp.length;
+      S.battleCd = 6; sndAlert();
+      toast("THE VAN'S JACKBOYS GOT TO YOU — " + n + " of them, and they want the package!", true);
+      startBattle({ type:"jackboy", title:"BLACK VAN — " + n + " JACKBOY" + (n > 1 ? "S" : ""), oppName:"Black van crew", oppEmoji:"🥷", oppMeta:n + " on you · they want the work", text:"<b>" + n + " jackboy" + (n > 1 ? "s have" : " has") + " you.</b> Fight all of them or break away — nobody gets a free pass.", choices:[
+        { label:S.spaceGun ? ("FIGHT — " + spaceDef().name) : (S.gunTier ? ("FIGHT — " + gunName().toUpperCase() + " 🔫") : "FIGHT — HANDS"), sub:"All " + n + " are in it at once. Win and the work is yours.", danger:true, run:function(){
+            startFight({ p:0.4, oppName:"Black van crew", oppEmoji:"🥷", armed:true, group:grp, noAmbulance:true, noHospital:true, noFlee:true, onResolve:function(won){
+              if (!won){ plugVanEnd("", true); return; }
+              V.crew = []; V.exited = 3; plugVanLost(); } });
+        } },
+        { label:"RUN", sub:S.driving ? "Your wheels help — a real shot" : "On foot against " + n + " — long odds", run:function(){
+            var p = S.driving ? 0.6 : 0.32;
+            if (Math.random() < p){
+              battleSay("<b>You bolted!</b> They're stumbling — a head start, but the van's still hunting you.", [{ label:"GO GO GO", primary:true, run:function(){ endBattle(); V.holdT = 4.5; V.crew.forEach(function(o){ o._frozen = false; }); addClout(1, "broke away from the plug van"); updateHUD(); } }]);
+            } else battleSay("<b>Tackled.</b> Running made it worse — they take everything.", [{ label:"TAKE IT", run:function(){ endBattle(); plugVanEnd("", true); } }]);
+        } }
+      ] });
     }
     function plugVanLost(){
       var V = plugVan; if (!V) return;
@@ -9154,6 +9202,7 @@
         if (h.phase === 2){ ctx.font = "22px sans-serif"; ctx.textAlign = "center"; ctx.fillText("❗", T.x, T.y - 52); }
       } });
       h.shooters.forEach(function(s){ list.push({ x:s.x, y:s.y, fn:function(){
+        if (h.phase >= 1 && h.phase <= 2){ aimAt(s, T.x, T.y, 400); if (h.phase === 2 && Math.floor(performance.now() / 160) % 2 === 0) s.kick = performance.now() + 110; }
         drawPerson(s, { skin:s.skin, shirt:s.shirt, pants:s.pants, hair:s.hair, accent:s.accent, shoes:s.shoes, name:"ENFORCER", role:"crew" });
         if (h.phase === 2){
           ctx.save(); var fx = s.x + h.sx * 20, fy = s.y - 4;
@@ -13380,18 +13429,29 @@
 
     /* the shooting arm: reaches toward the target with a pistol; a muzzle flash and a little kick when it just fired */
     function drawGunArm(e, x, shY, sleeve, skin){
-      var ax = x + 8, ay = shY + 6, dx = (e.aimX || e.x + 1) - e.x, dy = ((e.aimY || e.y) - 18) - ay, d = Math.sqrt(dx * dx + dy * dy) || 1, ux = dx / d, uy = dy / d, kick = (e.kick || 0) > performance.now() ? -4 : 0, hx = ax + ux * (19 + kick), hy = ay + uy * (19 + kick);
-      ctx.save(); ctx.lineCap = "round";
-      ctx.strokeStyle = INK; ctx.lineWidth = 9.5; ctx.beginPath(); ctx.moveTo(ax, ay); ctx.lineTo(hx, hy); ctx.stroke();
-      ctx.strokeStyle = sleeve; ctx.lineWidth = 6.5; ctx.beginPath(); ctx.moveTo(ax, ay); ctx.lineTo(hx, hy); ctx.stroke();
-      ctx.fillStyle = skin; ctx.beginPath(); ctx.arc(hx, hy, 3.6, 0, Math.PI * 2); ctx.fill();
-      var gx = hx + ux * 11, gy = hy + uy * 11;
-      ctx.strokeStyle = INK; ctx.lineWidth = 6; ctx.beginPath(); ctx.moveTo(hx, hy); ctx.lineTo(gx, gy); ctx.stroke();
-      ctx.strokeStyle = "#6b7280"; ctx.lineWidth = 3.2; ctx.beginPath(); ctx.moveTo(hx, hy); ctx.lineTo(gx, gy); ctx.stroke();
-      if ((e.kick || 0) > performance.now()){ ctx.fillStyle = "#fff3b0"; ctx.beginPath(); ctx.arc(gx + ux * 6, gy + uy * 6, 6, 0, Math.PI * 2); ctx.fill(); ctx.fillStyle = "#ffb703"; ctx.beginPath(); ctx.arc(gx + ux * 6, gy + uy * 6, 3.2, 0, Math.PI * 2); ctx.fill(); }
+      // arm straight out at the target, a BIG readable pistol in the fist, muzzle flash + kick on every shot
+      var now = performance.now(), ax = x + (e.face >= 0 ? 8 : -8), ay = shY + 4, tx = (e.aimX != null ? e.aimX : e.x + (e.face || 1)), ty = (e.aimY != null ? e.aimY : e.y) - 18;
+      var dx = tx - ax, dy = ty - ay, d = Math.sqrt(dx * dx + dy * dy) || 1, ux = dx / d, uy = dy / d, px = -uy, py = ux, firing = (e.kick || 0) > now, kick = firing ? -5 : 0;
+      var hx = ax + ux * (30 + kick), hy = ay + uy * (30 + kick), gl = 34;
+      ctx.save(); ctx.lineCap = "round"; ctx.lineJoin = "round";
+      // arm
+      ctx.strokeStyle = INK; ctx.lineWidth = 13; ctx.beginPath(); ctx.moveTo(ax, ay); ctx.lineTo(hx, hy); ctx.stroke();
+      ctx.strokeStyle = sleeve; ctx.lineWidth = 9; ctx.beginPath(); ctx.moveTo(ax, ay); ctx.lineTo(hx, hy); ctx.stroke();
+      // pistol: dark slide with a light edge, grip under the fist
+      var gx = hx + ux * gl, gy = hy + uy * gl;
+      ctx.strokeStyle = INK; ctx.lineWidth = 15; ctx.beginPath(); ctx.moveTo(hx, hy); ctx.lineTo(gx, gy); ctx.stroke();
+      ctx.strokeStyle = "#3a3f4d"; ctx.lineWidth = 10; ctx.beginPath(); ctx.moveTo(hx, hy); ctx.lineTo(gx, gy); ctx.stroke();
+      ctx.strokeStyle = "#d7dee8"; ctx.lineWidth = 3; ctx.beginPath(); ctx.moveTo(hx + px * 3, hy + py * 3); ctx.lineTo(gx + px * 3, gy + py * 3); ctx.stroke();
+      ctx.strokeStyle = INK; ctx.lineWidth = 6; ctx.beginPath(); ctx.moveTo(hx + ux * 4, hy + uy * 4); ctx.lineTo(hx + ux * 4 - px * 7 * (px >= 0 ? 1 : 1) + 0, hy + uy * 4 + 9); ctx.stroke();
+      ctx.fillStyle = skin; ctx.beginPath(); ctx.arc(hx, hy, 6, 0, Math.PI * 2); ctx.fill(); ctx.strokeStyle = INK; ctx.lineWidth = 2.4; ctx.stroke();
+      if (firing){
+        var mx = gx + ux * 5, my = gy + uy * 5;
+        ctx.fillStyle = "#fff3b0"; ctx.beginPath(); ctx.moveTo(mx, my); ctx.lineTo(mx + ux * 30 - px * 12, my + uy * 30 - py * 12); ctx.lineTo(mx + ux * 48, my + uy * 48); ctx.lineTo(mx + ux * 30 + px * 12, my + uy * 30 + py * 12); ctx.closePath(); ctx.fill();
+        ctx.fillStyle = "#ffb703"; ctx.beginPath(); ctx.arc(mx + ux * 4, my + uy * 4, 10, 0, Math.PI * 2); ctx.fill();
+        ctx.fillStyle = "#fff"; ctx.beginPath(); ctx.arc(mx + ux * 2, my + uy * 2, 3.2, 0, Math.PI * 2); ctx.fill();
+      }
       ctx.restore();
     }
-    /* a man who got hit folds: he tips over sideways over about half a second */
     function drawPerson(e, o){
       var dn = e.downAt;
       if (dn){
@@ -13399,6 +13459,10 @@
         ctx.save(); ctx.translate(e.x, e.y + 24); ctx.rotate(ang); ctx.translate(-e.x, -(e.y + 24)); drawPersonBase(e, o); ctx.restore(); return;
       }
       drawPersonBase(e, o);
+      if ((e.aimUntil || 0) > performance.now()){   // gun's up: a bold marker so it reads even from the zoomed-out street view
+        var ip = (e.kick || 0) > performance.now();
+        ctx.save(); ctx.font = (ip ? "26px" : "21px") + " sans-serif"; ctx.textAlign = "center"; ctx.fillText(ip ? "💥" : "🔫", e.x, e.y - 70); ctx.restore();
+      }
     }
     function drawPersonBase(e, o){
       // JET SET RADIO pass: lanky proportions, streetwear, big sneakers.
