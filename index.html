@@ -636,6 +636,7 @@
       .b-proj{ position:absolute; z-index:5; font-size:22px; line-height:1; pointer-events:none; }
       .b-sprite{ will-change:transform; }
       /* ---- map ---- */
+      body.racing #guide{ display:none !important; }   /* no mission arrow in a race */
       .panelpop.boardpop{ max-height:none; }
       .panelpop.boardpop .bdrow .gbtn{ flex:0 0 auto; white-space:nowrap; }
       .panelpop.boardpop.show{ display:block; overflow-y:auto; -webkit-overflow-scrolling:touch; }
@@ -1145,6 +1146,7 @@
        ========================================================= */
 
     var INK = "#171923";
+    var RACE = { on:false, phase:"off", players:[], me:null };   // Rack Race state (the full object is built in the RACK RACE module; this early stub keeps boot-time code safe)
     var WORLD_W = 3000, WORLD_H = 2100;
 
     var canvas = document.getElementById("game");
@@ -2128,14 +2130,29 @@
     /* the designated pull-up spot nearest a point — prefer one within
        maxR; if the block offers none that close, the nearest spot on
        the grid still wins over a random point off-street */
-    function nearestPullSpot(x, y, maxR){
-      var best = null, bd = 1e18;
+    /* every special vehicle (buyer car, plug runner, black van, cruiser, tow truck, ambulance) claims its curb spot, so two of them never park on top of each other.
+       `who` is the requester's own key ("buyer", "plug", "van", "cruiser", "tow"): its own claim never blocks itself. */
+    function claimedSpots(who){
+      var L = [];
+      try {
+        if (who !== "buyer" && typeof buyerCar !== "undefined" && buyerCar){ L.push({ x:buyerCar.x, y:buyerCar.y }); if (buyerCar.tx != null) L.push({ x:buyerCar.tx, y:buyerCar.ty }); }
+        if (who !== "plug" && typeof plugRun !== "undefined" && plugRun){ L.push({ x:plugRun.car.x, y:plugRun.car.y }); if (plugRun.spot) L.push(plugRun.spot); }
+        if (who !== "van" && typeof plugVan !== "undefined" && plugVan && plugVan.active){ L.push({ x:plugVan.x, y:plugVan.y }); if (plugVan.park) L.push(plugVan.park); }
+        if (who !== "cruiser" && typeof cruiser !== "undefined" && cruiser && cruiser.active){ L.push({ x:cruiser.x, y:cruiser.y }); if (cruiser.park) L.push(cruiser.park); }
+        if (who !== "tow" && typeof tow !== "undefined" && tow){ L.push({ x:tow.x, y:tow.y }); if (tow.drop) L.push(tow.drop); }
+        if (typeof oppAmb !== "undefined" && oppAmb && oppAmb.car) L.push({ x:oppAmb.car.x, y:oppAmb.car.y });
+      } catch(e){}
+      return L;
+    }
+    function nearestPullSpot(x, y, maxR, who){
+      var best = null, bd = 1e18, claims = claimedSpots(who);
       for (var i = 0; i < pullSpots.length; i++){
         var sp = pullSpots[i], taken = false, j;
         // a spot is only a spot if it's EMPTY: never stack the buyer
         // car onto a rolling traffic car or your own parked whip
         for (j = 0; j < traffic.length && !taken; j++){ if (dist(sp.x, sp.y, traffic[j].x + traffic[j].ox, traffic[j].y + traffic[j].oy) < 95) taken = true; }
         if (!taken && S.car && !S.driving && dist(sp.x, sp.y, S.carPos.x, S.carPos.y) < 126) taken = true;
+        for (j = 0; j < claims.length && !taken; j++){ if (dist(sp.x, sp.y, claims[j].x, claims[j].y) < 120) taken = true; }
         if (taken) continue;
         var d = dist(x, y, sp.x, sp.y);
         if (d < bd){ bd = d; best = sp; }
@@ -2184,6 +2201,10 @@
         landmark:{ name:"MADISONVILLE RECREATION CENTER", sign:"MADISONVILLE REC", x:2370, y:1425, w:435, h:270, wall:"#b4552d", roof:"#5e2a14", doorDx:218, doorDy:-39 },
         moves:{ store:{ dx:-68, dy:12, sign:"MADISON RD. MARKET", wall:"#ffb703" }, club:{ dx:60, sign:"BRAMBLE CLUB", name:"Bramble Club", wall:"#7a2d12" }, trap:{ dx:45, dy:-18 }, hotel:{ dx:-52, sign:"ERIE INN", wall:"#e07a3f" }, auto:{ dx:75, sign:"WHETSEL AUTO" }, apt:{ dx:-45, dy:9, sign:"MADISON ARMS", wall:"#b4552d" } } }
     };
+    /* RACK RACE hood: Winton Terrace, "THE T" — reached from the transit map, but it only ever opens the multiplayer menu (never a normal solo hood) */
+    HOOD_LAYOUTS.winton = { streets:"WINNESTE & HOPPLE", court:"WT", vx:1500, vName:"Winneste Ave", hName:"Hopple St", ringT:"Spring Grove Ave", ringB:"Beekman St", ringL:"Winton Rd", ringR:"Colerain Ave", neon:["THE T","OPEN 24"],
+      landmark:{ name:"WINTON TERRACE REC CENTER", sign:"THE T REC", x:2370, y:1425, w:435, h:270, wall:"#8f5a3b", roof:"#3a2a22", doorDx:218, doorDy:-39 },
+      moves:{ store:{ dx:-68, dy:12, sign:"WINNESTE MARKET", wall:"#ff5d8f" }, club:{ dx:60, sign:"THE T LOUNGE", name:"The T Lounge", wall:"#5a2236" }, trap:{ dx:45, dy:-18, sign:"THE T TRAP" }, hotel:{ dx:-52, sign:"HOPPLE INN", wall:"#8f5a3b" }, auto:{ dx:75, sign:"BEEKMAN AUTO" }, apt:{ dx:-45, dy:9, sign:"WINTON ARMS", wall:"#a06a45" } } };
     function hoodLayout(){ return HOOD_LAYOUTS[S.district] || HOOD_LAYOUTS.dtw; }
     var _mapSeenInit = false;
     function applyHoodLayout(){
@@ -2229,6 +2250,7 @@
         b.sign = mv.sign || base.sign; b.name = mv.name || base.name;
         b.door = { x: b.x + base.doorDx, y: b.y + base.doorDy };
       });
+      if (S.district === "winton") tLayout(); else removeRaceHouses();   // the T: The Spot in the middle, four equidistant trap houses
       solids = buildings.map(function(b){ return { x:b.x, y:b.y, w:b.w, h:b.h }; }).concat(props);
       // the plug works his corner by the Spot; Trvp posts up by the apartments
       var td = buildingById("trap").door;
@@ -2272,7 +2294,9 @@
       { id:"evanston", name:"Evanston",        nick:"EVANSTON",      fare:11, mins:65,  heat:0.95, jack:0.9,  wash:"rgba(39,67,122,.11)",  pal:{ grass:"#7aa355", wall:"#27437a", roof:"#101f3c", accent:"#f2c14e" }, tag:"Xavier money off Montgomery Rd. Campus-adjacent — Moon Candy pays, Glitter runs cheap.", mult:{ fizz:1.2,  candy:1.5,  glitter:0.7,  static:1.05, velvet:1.3,  star:1.4  } },
       { id:"madisonville", name:"Madisonville", nick:"MADISONVILLE", fare:13, mins:80,  heat:1.05, jack:1.0,  wash:"rgba(255,140,50,.09)", pal:{ grass:"#84a856", wall:"#b4552d", roof:"#5e2a14", accent:"#ff9e45" }, tag:"Artsy blocks off Madison Rd. Gallery money — Glitter pays, Fizz rolls cheap.", mult:{ fizz:0.7,  candy:1.1,  glitter:1.7,  static:0.85, velvet:1.35, star:1.25 } }
     ];
-    function districtById(id){ for (var i=0;i<DISTRICTS.length;i++) if (DISTRICTS[i].id===id) return DISTRICTS[i]; return DISTRICTS[0]; }
+    var WINTON = { id:"winton", name:"Winton Terrace", nick:"THE T", mp:true, fare:9, mins:50, heat:1.2, jack:1.2, wash:"rgba(255,93,143,.09)", pal:{ grass:"#6c9a50", wall:"#8f5a3b", roof:"#3a2a22", accent:"#ff5d8f" },
+      tag:"RACK RACE — Winton Terrace, the T. Gold rush: first to bank $1,000,000 wins. Enter to open the multiplayer menu.", mult:{ fizz:1, candy:1, glitter:1, static:1, velvet:1, star:1 } };
+    function districtById(id){ if (id === "winton") return WINTON; for (var i=0;i<DISTRICTS.length;i++) if (DISTRICTS[i].id===id) return DISTRICTS[i]; return DISTRICTS[0]; }
     function curDistrict(){ return districtById(S.district); }
     function goodById(id){ for (var i=0;i<GOODS.length;i++) if (GOODS[i].id===id) return GOODS[i]; return GOODS[0]; }
 
@@ -2365,6 +2389,12 @@
         { name:"Madisonville Mae", role:"local", title:"Madison Rd. mural watcher", skin:"#f1c27d", shirt:"#9b5de5", pants:"#2e2e38", hair:"#191920", accent:"#ffffff", shoes:"#ffffff", line:"Painted half the murals on Madison Rd. Sees the rest." }
       ]
     };
+    HOOD_CAST.winton = [
+      { name:"T-Money", role:"plug", title:"Kingpin of the T — Winneste Ave. rack money", skin:"#6b4423", shirt:"#ff5d8f", pants:"#17171f", hair:"#0c0c10", accent:"#ffd23f", shoes:"#14161d", line:"The T runs hot. Everybody out here is racing for the same rack." },
+      { name:"Hopple Hank", role:"lick", title:"Starlight buyer — late shift", skin:"#8d5524", shirt:"#ffd23f", pants:"#264653", hair:"#101014", accent:"#e63946", shoes:"#ffffff", line:"Pays cash on the corner. No questions." },
+      { name:"Beekman Bee", role:"lick", title:"Velvet buyer — all night", skin:"#c68642", shirt:"#9b5de5", pants:"#2e2e38", hair:"#191920", accent:"#5eead4", shoes:"#ffffff", line:"Bee buys loud and tips louder." },
+      { name:"Winton Wanda", role:"local", title:"Corner watcher", skin:"#f1c27d", shirt:"#00bbf9", pants:"#3b2f4a", hair:"#191920", accent:"#ffffff", shoes:"#ffffff", line:"Wanda sees every stash run on Winneste." }
+    ];
     function hoodCast(distId){ return HOOD_CAST[distId] || HOOD_CAST.dtw; }
     function hoodLicks(distId){ return hoodCast(distId).filter(function(c){ return c.role === "lick"; }); }
     function hoodPlug(distId){ var c = hoodCast(distId); for (var i=0;i<c.length;i++) if (c[i].role==="plug") return c[i]; return c[0]; }
@@ -2438,6 +2468,7 @@
       evanston: { perks:["Lick deals +16% at home (Xavier money)","Licks flag you down 20% more at home"], downType:"prices",   downLabel:"HIGHER STORE PRICES — The Spot charges +10% at home (student tax)", buy:1.10, deal:1.16, lick:1.20, pack:1.00, jack:1.00, heat:1.00, bribe:100, rival:"walnut" },
       madisonville:{ perks:["Lick deals +15% at home (revival money)","Packs glow up 20% faster at home"], downType:"jackboys", downLabel:"JACKBOYS HUNT HERE — new money draws eyes; they roll up 30% faster at home", buy:0.92, deal:1.15, lick:1.05, pack:0.80, jack:1.30, heat:1.00, bribe:100, rival:"avondale" }
     };
+    HOME_PROFILES.winton = { perks:["Rack Race hood","Gold rush: deals pay big"], downType:"jackboys", downLabel:"JACKBOYS HUNT HERE", buy:1, deal:1, lick:1, pack:1, jack:1.2, heat:1.0, bribe:100, rival:"avondale" };
     function homeProf(id){ return HOME_PROFILES[id || S.home] || HOME_PROFILES.dtw; }
     /* what The Spot charges YOU here — your home profile sets the rate */
     function districtIsHome(){ return !!S.home && S.district === S.home; }
@@ -3100,7 +3131,7 @@
         if (towFollow(w, 780, dt)){ w.phase = 1; w.t = 0; sndGood(); }
       } else if (w.phase === 1){
         if (w.t > 0.9){
-          var sp = nearestPullSpot(player.x, player.y, 800);
+          var sp = nearestPullSpot(player.x, player.y, 800, "tow");
           var dpt = sp ? { x:sp.x, y:sp.y, dir:sp.dir } : (function(){ var rp = nearestRoadPoint(player.x, player.y); return { x:Math.round(rp.x), y:Math.round(rp.y), dir:0 }; })();
           w.drop = dpt; w.dropRoad = nearestRoadPoint(dpt.x, dpt.y);
           w.route = towRoute({ x:w.x, y:w.y }, w.dropRoad); w.phase = 2; w.t = 0;
@@ -3185,7 +3216,7 @@
         addShake(6, 0.35);
         for (var k = 0; k < 4; k++) burst(driveby.x + 40, driveby.y - 18 + k * 8, "#ffd76e", 6, 220);
         var dy = Math.abs(player.y - ST_AVENUE_Y);
-        var exposed = dy < 300 && !nearDoorstep() && !(S.ghostTime > 0) && !S.holedUp;
+        var exposed = dy < (RACE.on ? RACE_CFG.dbBand : 300) && !nearDoorstep() && !(S.ghostTime > 0) && !S.holedUp;
         var st = driveby.retal ? { choices:{}, flags:{} } : storyState(), murked = false;   // retaliation never touches the story's drive-by beat
         if (exposed && driveby.ducked){
           addClout(5, "ducked a drive-by");
@@ -3193,7 +3224,7 @@
           toast("You hit the dirt — rounds sparked off the asphalt right over you. The block saw it.");
           log("You ducked the drive-by at the last second. +5 clout.", "good");
           sndEscape();
-        } else if (exposed && Math.random() < clamp((dy < 150 ? 0.45 : 0.70) - (driveby.esc || 0) * 0.07 + (driveby.retal ? retalProtection().total * 0.5 : 0), 0.08, 0.92)){
+        } else if (exposed && Math.random() < clamp((dy < 150 ? 0.45 : 0.70) - (RACE.on ? RACE_CFG.dbDodgePenalty : 0) - (driveby.esc || 0) * 0.07 + (driveby.retal ? retalProtection().total * 0.5 : 0), 0.08, 0.92)){
           /* the shooters are inaccurate: standing in the open you still dodge it by luck 45% of the time (70% at the edge of the spray) */
           addClout(2, "survived a drive-by");
           st.choices.dbHit = 0;
@@ -3577,6 +3608,7 @@
     }
     var storyT = 0;
     function updateStory(dt){
+      if (RACE.on) return;   // no story beats, Trvp plots or objective chatter inside a race
       if (!S || !S.username) return;            // the story starts once there's a player
       storyT += dt; if (storyT < 0.4) return; storyT = 0;
       var st = storyState();
@@ -3629,6 +3661,7 @@
       evanston: { name:"Officer Novak",     skin:"#f1c27d", shirt:"#31456e", pants:"#1a2438", hair:"#5b4636", accent:"#f2c14e", speedMul:0.95, sight:310, bribeMul:0.95, tough:0.00 },
       madisonville:{ name:"Officer Ruiz",   skin:"#c68642", shirt:"#274690", pants:"#16233c", hair:"#191920", accent:"#ff9e45", speedMul:1.02, sight:340, bribeMul:1.10, tough:0.03 }
     };
+    COP_ROSTER.winton = { name:"Officer Banks", skin:"#8d5524", shirt:"#2b50c8", pants:"#1d2c40", hair:"#101014", accent:"#ff5d8f", speedMul:1.04, sight:350, bribeMul:1.1, tough:0.03 };
     function copName(){ return (typeof cop !== "undefined" && cop && cop.name) ? cop.name : "Officer Reed"; }
     function seatCop(){
       if (typeof cop === "undefined" || !cop) return;
@@ -3859,6 +3892,7 @@
 
     /* ---------------- economy helpers ---------------- */
     function earn(n, why){
+      if (RACE.on && RACE.phase === "run"){ var cu = 1; if (RACE_CFG.catchUp && RACE.left < RACE_CFG.catchUpSecs && /^(Lick|BULK lick)/.test(String(why))){ var en = raceEntries(); if (en.length > 1 && en[en.length - 1].players.indexOf(RACE.me) >= 0) cu = RACE_CFG.catchUpMul; } n = Math.round(n * RACE_CFG.payMul * cu); }
       // pockets hold unlimited cash — every dollar lands on your person.
       // What rides with you can be taken; the Stash is the only safe store.
       S.cash += n; S.totalEarned += n; addIncome(incomeCat(why), n);
@@ -4132,6 +4166,14 @@
       // behind the wheel there is no A-interact: B steps out, and licks
       // come to the window on their own — A stays talk/interact/confirm
       if (S.driving) return null;
+      if (RACE.on){
+        if (!raceRun() || !RACE.me || RACE.me.down) return null;
+        var mdr = raceHouseDoor(RACE.me.id);
+        if (dist(p.x, p.y, mdr.x, mdr.y + 24) < 82) return { label:"STASH " + money(Math.round(S.cash)) + " — your " + RACE.me.label + " trap house (clears the heat)", run:raceStash, x:mdr.x, y:mdr.y + 24 };
+        if (dist(p.x, p.y, T_SPOT.x, T_SPOT.y + 20) < 96) return { label:"THE SPOT — free supply: restock your pockets", run:raceRestock, x:T_SPOT.x, y:T_SPOT.y + 20 };
+        for (var rh = 0; rh < 4; rh++){ if (RACE.me.id === rh) continue; var od = raceHouseDoor(rh); if (dist(p.x, p.y, od.x, od.y + 24) < 70) return { label:RACE_SLOTS[rh].label + "'s trap house — you can only stash at yours", run:function(){ toast("That's not your door. Yours is " + RACE.me.label + "."); }, x:od.x, y:od.y + 24 }; }
+        var lk = null; 
+      }
       // Trvp — alien guide (posted up by the apartments)
       if (!S.ship && dist(p.x, p.y, trvp.x, trvp.y) < 72){
         return { label:"Talk to Trvp" + (!S.power && S.trvpCd <= 0 ? " — the saucer comes down for this" : ""), run: talkToTrvp, x: trvp.x, y: trvp.y };
@@ -4196,9 +4238,10 @@
         return { label:"Slip " + copName() + " a bribe — " + BRIBE_TIERS.map(function(b){ return money(b.cost); }).join(" / ") + " · scales with your cash · bigger fold, longer grace", run: bribeCop, x: cop.x, y: cop.y };
       }
       // transit stop — ride to another district
-      if (dist(p.x, p.y, TRANSIT.x, TRANSIT.y) < 62){
+      if (!RACE.on && dist(p.x, p.y, TRANSIT.x, TRANSIT.y) < 62){
         return { label:"Transit stop — ride to another district", run: openTravel, x: TRANSIT.x, y: TRANSIT.y };
       }
+      if (RACE.on) return null;   // in the T the only doors that matter are your trap house and The Spot (handled above)
       // buildings — doors forgive: a wide step-up zone opens the prompt
       // your whip wins whenever it is the closer thing: standing by the car in front of a door (the Justice Center after you're released) must get you in the car, not the building
       var carD = S.car && S.carPos ? dist(p.x, p.y, S.carPos.x, S.carPos.y) : 1e9;
@@ -4520,6 +4563,7 @@
     }
     // one-line, non-blocking hints (toast + street log)
     function trvpHint(key, text){
+      if (RACE.on) return;
       if (S.hints[key]) return;
       S.hints[key] = true;
       toast("TRVP: " + text);
@@ -4564,6 +4608,7 @@
         case "covington": return "Kentucky side, across the river. Velvet's dirt cheap; Starlight pays best in the city. Mind the bridge.";
         case "bondhill": return "Reading Rd. corridor under the trees. Static pays green out here, Velvet's cheap, and the blocks stay quiet.";
         case "evanston": return "Montgomery Rd. by Xavier. Moon Candy pays student money; Glitter goes cheap off Dana Ave.";
+        case "winton": return "Winneste Ave. at full speed. Everybody in the T is racing for the same rack.";
         case "madisonville": return "Madison Rd. revival blocks. Glitter pays gallery money, Fizz rolls off cheap — brick, murals and new money.";
       }
       return d.tag;
@@ -5171,8 +5216,8 @@
       chaseStep(o, tx, ty, 195 * (cop.speedMul || 1), dt, 6);
     }
     /* the nearest empty street-parking spot to YOU (same spots the buyer cars and tow truck use) */
-    function pickPark(){
-      var sp = nearestPullSpot(player.x, player.y, 1100);
+    function pickPark(who){
+      var sp = nearestPullSpot(player.x, player.y, 1100, who || "cruiser");
       var base = sp ? { x:sp.x, y:sp.y, dir:sp.dir } : (function(){ var rp = nearestRoadPoint(player.x, player.y); return { x:Math.round(rp.x), y:Math.round(rp.y), dir:0 }; })();
       base.road = nearestRoadPoint(base.x, base.y);
       return base;
@@ -5267,7 +5312,7 @@
       // you're on foot: it rolls to the curb nearest you, parks, and the officers get out
       if (cruiser.phase === "chase"){ cruiser.phase = "arrive"; cruiser.park = null; }
       if (cruiser.phase === "arrive"){
-        if (!cruiser.park || (cruiser.planT <= 0 && dist(player.x, player.y, cruiser.park.x, cruiser.park.y) > 500)){ cruiser.park = pickPark(); cruiser.route = towRoute(cruiser, cruiser.park.road); }
+        if (!cruiser.park || (cruiser.planT <= 0 && dist(player.x, player.y, cruiser.park.x, cruiser.park.y) > 500)){ cruiser.park = pickPark("cruiser"); cruiser.route = towRoute(cruiser, cruiser.park.road); }
         if (cruiser.planT <= 0) cruiser.planT = 2;
         if (cruiserDrive(CRUISER_SPEED, dt)){
           cruiser.x = cruiser.park.x; cruiser.y = cruiser.park.y; cruiser.dir = cruiser.park.dir || 0;
@@ -5953,7 +5998,7 @@
       // sensible radius — on a street by construction, reachable by
       // streets, so the car pulls up TO THE CURB instead of hunting a
       // random open point through buildings
-      var spot = nearestPullSpot(player.x, player.y, 700) || { x:1500, y:ST_HY };
+      var spot = nearestPullSpot(player.x, player.y, 700, "buyer") || { x:1500, y:ST_HY };
       buyerCar = { x:entry.x, y:entry.y, r:26, walk:0, face:1, moving:false, origin:od.id, hood:S.district, state:"drive", tx:spot.x, ty:spot.y, parkT:0, lx:entry.x, ly:entry.y,
                    route:carRoute(entry.x, entry.y, spot.x, spot.y), driveT:0, ox:0, oy:0 };
     }
@@ -6042,7 +6087,7 @@
         if (buyerTimer <= 0){ spawnBuyerCar(); log("A buyer car from " + districtById(buyerCar.origin).nick + " is rolling in.", ""); }
         return;
       }
-      if (buyerCar.hood !== S.district){ buyerCar = null; buyerTimer = rand(25, 50); return; }   // you crossed town — that car was back in the other hood
+      if (buyerCar.hood !== S.district){ buyerCar = null; buyerTimer = RACE.on ? rand(RACE_CFG.buyerFirst[0], RACE_CFG.buyerFirst[1]) : rand(25, 50); return; }   // you crossed town — that car was back in the other hood
       if (buyerCar.state === "drive"){
         buyerCar.walk += dt * 10;
         buyerCar.driveT = (buyerCar.driveT || 0) + dt;
@@ -6078,7 +6123,7 @@
         buyerCar.driveT = (buyerCar.driveT || 0) + dt;
         var gone = towFollow(buyerCar, 470, dt);
         if (gone || buyerCar.driveT > 40){
-          buyerCar = null; buyerTimer = rand(55, 100);   // next one in another minute or so
+          buyerCar = null; buyerTimer = RACE.on ? rand(RACE_CFG.buyerRespawn[0], RACE_CFG.buyerRespawn[1]) : rand(55, 100);   // next one in another minute or so
         }
       }
     }
@@ -6140,7 +6185,7 @@
         }
         addHeat(22); addBeef(originHood, 14, od.nick + " buyers"); addHoodClout(S.district, -4, "robbed out-of-hood buyers");
         if (buyerCar) buyerCarLeave();
-        buyerTimer = rand(140, 220);
+        buyerTimer = RACE.on ? rand(RACE_CFG.buyerRespawn[0], RACE_CFG.buyerRespawn[1]) : rand(140, 220);
         updateHUD();
       } });
     }
@@ -6283,6 +6328,7 @@
 
     function update(dt){
       updateMusic(dt);
+      if (RACE.on){ updateRace(dt); raceHudTick(); if (RACE.phase === "over" && menu !== "hud") raceExit(); }
       if (rescue){ updateRescue(dt); return; }
       // cooldowns — EVERY NPC class breathes on a timer now, so the
       // block can't machine-gun encounters and the game can't run too fast
@@ -6343,7 +6389,7 @@
       // Stick is true analog: direction is 360°, speed scales with how
       // far you push (dead-zone 0.16 so a resting thumb doesn't drift).
       var mx = 0, my = 0, stickMag = 0;
-      if (!dialogue && !menu && !beamUp){
+      if (!dialogue && !menu && !beamUp && !(RACE.on && RACE.phase === "count")){
         if (keys["arrowleft"] || keys["a"]) mx -= 1;
         if (keys["arrowright"] || keys["d"]) mx += 1;
         if (keys["arrowup"] || keys["w"]) my -= 1;
@@ -6849,7 +6895,7 @@
     var MAP_W = 3700, MAP_H = 2300, TILE_W = 480, TILE_H = 336, TK = TILE_W / WORLD_W;
     /* tile centres follow the real geography (west → east, north → south) */
     var MAP_POS = { westside:{ x:330, y:760 }, uptown:{ x:1010, y:330 }, campus:{ x:1190, y:830 }, pricehill:{ x:560, y:1330 }, westend:{ x:1200, y:1500 }, dtw:{ x:1760, y:1500 },
-                    mta:{ x:1840, y:1000 }, avondale:{ x:2300, y:700 }, bondhill:{ x:2560, y:260 }, walnut:{ x:2380, y:1190 }, evanston:{ x:2900, y:1050 }, madisonville:{ x:3380, y:1360 }, covington:{ x:1700, y:2050 } };
+                    mta:{ x:1840, y:1000 }, avondale:{ x:2300, y:700 }, bondhill:{ x:2560, y:260 }, walnut:{ x:2380, y:1190 }, evanston:{ x:2900, y:1050 }, madisonville:{ x:3380, y:1360 }, covington:{ x:1700, y:2050 }, winton:{ x:1560, y:300 } };
     var mapSt = { zoom:1, cx:MAP_W / 2, cy:MAP_H / 2, w:300, h:300, dpr:1, ptrs:{}, moved:0, running:false, pins:[], sel:null };
     function mapScaleBase(){ return Math.min(mapSt.w / MAP_W, mapSt.h / MAP_H); }
     function mapScale(){ return mapScaleBase() * mapSt.zoom; }
@@ -7375,7 +7421,7 @@
       var g = gid ? goodById(gid) : plugBestGood(), price = plugPrice(g), room = Math.max(0, invCap() - invCount()), n = Math.min(room, Math.floor(funds() / price));
       if (n <= 0){ toast(room <= 0 ? "Your pockets are full — sell some weight first." : "Short — one " + g.name + " is " + money(price) + " from the plug."); sndBad(); return; }
       setCd("plugdrop", 360);
-      var spot = pickPark(), corner = EXIT_CORNERS.slice().sort(function(a, b){ return dist(a.x, a.y, spot.x, spot.y) - dist(b.x, b.y, spot.x, spot.y); })[0], entry = nearestRoadPoint(corner.x, corner.y);
+      var spot = pickPark("plug"), corner = EXIT_CORNERS.slice().sort(function(a, b){ return dist(a.x, a.y, spot.x, spot.y) - dist(b.x, b.y, spot.x, spot.y); })[0], entry = nearestRoadPoint(corner.x, corner.y);
       plugRun = { phase:"drive", t:0, hood:S.district, gid:g.id, n:n, price:price, spot:spot, entry:entry, rob:Math.random() < 0.3,
                   car:{ x:entry.x, y:entry.y, dir:0, hx:1, hy:0, route:towRoute(entry, spot.road) }, man:null, total:0 };
       toast("THE PLUG IS SENDING A RUNNER — a car is pulling up near you with " + n.toLocaleString("en-US") + " × " + g.name + " (" + money(n * price) + "). Be somewhere safe: not every pickup goes clean.");
@@ -7487,7 +7533,7 @@
       }
       if (V.phase === "chase"){ V.phase = "arrive"; V.park = null; }
       if (V.phase === "arrive"){
-        if (!V.park || (V.planT <= 0 && dist(player.x, player.y, V.park.x, V.park.y) > 500)){ V.park = pickPark(); V.route = towRoute(V, V.park.road); }
+        if (!V.park || (V.planT <= 0 && dist(player.x, player.y, V.park.x, V.park.y) > 500)){ V.park = pickPark("van"); V.route = towRoute(V, V.park.road); }
         if (V.planT <= 0) V.planT = 2;
         if (drive(CRUISER_SPEED)){ V.x = V.park.x; V.y = V.park.y; V.dir = V.park.dir || 0; V.phase = "parked"; V.t = 0; V.exited = 0; toast("THE VAN PARKED — three jackboys are getting out!", true); sndAlert(); }
         return;
@@ -7614,6 +7660,7 @@
       else if (k === "call"){ t = "CALL"; h = hudCallHtml(); }
       else if (k === "missions"){ t = "YOUR MISSIONS"; h = hudMissionsHtml(); }
       else if (k === "board"){ t = "🏆 LEADERBOARD"; h = hudBoardHtml(); }
+      else if (k === "race"){ t = "🏁 RACK RACE"; h = hudRaceHtml(); }
       hudPopEl.classList.toggle("boardpop", k === "board");
       title.textContent = t; body.innerHTML = h;
       body.querySelectorAll("[data-hact]").forEach(function(b){ b.addEventListener("click", function(){ if (uiLocked()) return; var f = hudActs[b.getAttribute("data-hact")]; if (f) f(); }); });
@@ -8802,6 +8849,7 @@
       tw.q.push({ key:key, text:text }); if (tw.q.length > 3) tw.q.shift();
     }
     function updateTrvpWatch(dt){
+      if (RACE.on) return;
       if (!S || !S.username || S.over) return;
       tw.clock += dt;
       var snap = { beam:(S.ghostCd || 0) > 0, trvp:(S.trvpCd || 0) > 0, plug:cd("plugdrop") > 0, dbl:(S.doubleT || 0) > 0, mag:(S.magnetT || 0) > 0, boost:(S.boostT || 0) > 0, hot:S.heat >= 55, power:!!S.power };
@@ -8829,6 +8877,7 @@
     }
     function trvpHint_force(text){ toast("TRVP: " + text); log("TRVP: " + text, "bad"); }
     function updateTrvpPlot(dt){
+      if (RACE.on) return;
       if (!S || !S.username || S.over) return;
       _trvpPlotT += dt; if (_trvpPlotT < 2.5) return; _trvpPlotT = 0;
       if (!S.tutorialDone) return;
@@ -9494,6 +9543,7 @@
       evanston: { store:{ name:"Montgomery Rd Corner Store",  price:4300, perMin:33 }, bar:{ name:"Musketeer Tavern", price:7600,  perMin:63 } },
       madisonville:{ store:{ name:"Madison Rd Corner Store", price:3900, perMin:30 }, bar:{ name:"Bramble Tavern",   price:6900,  perMin:57 } }
     };
+    BIZ_DEFS.winton = { store:{ name:"Winneste Market", price:3900, perMin:30 }, bar:{ name:"Hopple Tavern", price:6900, perMin:57 } };
     function bizDef(hoodId, kind){ var hd = BIZ_DEFS[hoodId]; return hd ? (hd[kind] || null) : null; }
     function bizState(id){
       if (!S.biz || typeof S.biz !== "object") S.biz = {};
@@ -10607,6 +10657,7 @@
     }
     function travelTo(distId){
       var d = districtById(distId);
+      if (d.mp){ drivePick = false; closeMenu(); openRaceMenu(); return; }   // the T never opens as a solo hood: it opens the multiplayer menu
       if (d.id === S.district){ closeMenu(); return; }
       // rolled up to the city limit in your own whip and picked from
       // the hoods list: no fare, no transit — rollOut drives you there
@@ -10974,6 +11025,7 @@
     }
     function rollLickKind(){
       var r = Math.random();
+      if (RACE.on) return (S.clout >= 35 && r < 0.3) ? "bulk" : "buy";   // in the T nobody sells YOU product — they all buy Starlight from you
       if (S.clout >= 35 && r < 0.24) return "bulk";   // clout gate: bulk buyers need a name
       if (r < 0.48) return "offer";
       return "buy";
@@ -11093,7 +11145,7 @@
       var takenLooks = cast.map(function(c){ return lookKey(c); });
       var takenShirts = cast.map(function(c){ return c.shirt; });
       blockReg = { names: taken, looks: takenLooks, shirts: takenShirts };
-      var LICK_COUNT = 7;   // a busier block: more green $ buyers walking around
+      var LICK_COUNT = RACE.on ? RACE_CFG.licks : 7;   // a busier block: more green $ buyers walking around
       var people = castLicks.filter(function(c){ return !(awayLeft(c.name) > 0); }).slice(0, LICK_COUNT);   // anyone locked up / hospitalized sits this visit out
       var extraN = 0;
       while (people.length < LICK_COUNT){
@@ -11267,7 +11319,7 @@
           // off, or you're short of his bulk), he re-shops on the spot
           else if (l.kind !== "offer" && (S.inv[bz.good] || 0) < bz.qty) assignLickBiz(l, true);
         }
-        if (l.offerCd > 0) l.offerCd -= dt;
+        if (l.offerCd > 0) l.offerCd -= dt * (RACE.on ? RACE_CFG.lickSpeed : 1);
 
         if (l.mode === "offer"){
           // posted up next to you — on foot he steps to your hand; behind
@@ -11787,7 +11839,7 @@
       for (k in S.traps) if (S.traps[k] && S.traps[k].owned) traps++;
       for (k in (S.held || {})) if (S.held[k]) hoods++;
       return { money:Math.round(funds()), earned:Math.round(S.totalEarned || 0), kills:st.kills | 0, hits:st.hits | 0, fights:st.fights | 0, robs:st.robs | 0, deals:st.deals | 0,
-               biggest:Math.round(Math.max(S.biggestDay || 0, S.dayEarned || 0)), clout:Math.round(S.clout || 0), busts:S.booked | 0, er:S.erVisits | 0, contracts:S.jobChain | 0, traps:traps, hoods:hoods };
+               biggest:Math.round(Math.max(S.biggestDay || 0, S.dayEarned || 0)), clout:Math.round(S.clout || 0), busts:S.booked | 0, er:S.erVisits | 0, contracts:S.jobChain | 0, traps:traps, hoods:hoods, mpwins:st.mpwins | 0, mpraces:st.mpraces | 0, mpbest:st.mpbest | 0 };
     }
     function empireScore(){
       var worth = S.cash + (S.bank || 0) + invValue();
@@ -12432,6 +12484,7 @@
       evanston: { wall:"brick",  win:"shutter", roof:"slate",   trim:true, chim:true },
       madisonville:{ wall:"panel", win:"wide",  roof:"metal",   mural:true }
     };
+    HOOD_STYLE.winton = { wall:"siding", win:"shutter", roof:"shingle", porch:true };
     function hoodStyle(id){ return HOOD_STYLE[id] || HOOD_STYLE.dtw; }
 
     function wallTexture(kind, x, y, w, h, hid){
@@ -12933,9 +12986,9 @@
     /* ---- the cache: one offscreen bitmap per (hood, building, state, light level) ---- */
     var bCache = {}, bCacheKeys = [], bcBuilds = 0, bcLast = {};
     function bcScale(){ var z = view.w < 640 ? 0.68 : 0.58; return Math.round(clamp(view.dpr * z, 0.5, 1.6) * 10) / 10; }
-    function trapBiz(){ var t = trapState(S.district), o = t.owned; return { kind: "trap", owned: o, you: youLook(), label: o ? "YOUR TRAP · T" + t.tier + " " + trapTierDef(t.tier).name : "FOR SALE — " + money(trapPrice(S.district)) }; }
+    function trapBiz(){ if (RACE.on && S.district === "winton") return { kind:"trap", owned:true, you:youLook(), label:"P1 TRAP HOUSE" }; var t = trapState(S.district), o = t.owned; return { kind: "trap", owned: o, you: youLook(), label: o ? "YOUR TRAP · T" + t.tier + " " + trapTierDef(t.tier).name : "FOR SALE — " + money(trapPrice(S.district)) }; }
     function buildingStateKey(b){
-      if (b.id === "traphouse"){ var t = trapState(S.district); return t.owned + "|" + t.tier + "|" + (S.lookIdx || 0); }
+      if (b.id === "traphouse"){ if (RACE.on && S.district === "winton") return "race"; var t = trapState(S.district); return t.owned + "|" + t.tier + "|" + (S.lookIdx || 0); }
       if (b.id === "bizstore" || b.id === "bizbar"){ var bk = b.id === "bizstore" ? "store" : "bar"; return bizState(S.district)[bk].owned + "|" + (S.lookIdx || 0); }
       return "";
     }
@@ -13794,6 +13847,7 @@
         }
       }});
       ents.push({ x:0, y:999999, fn:drawFieldFx });
+      drawRace(ents); drawRaceMe(ents);
       drawMansionGuards(ents);
       if (rescue) drawRescue(ents);
       if (tow) drawTow(ents);
@@ -14564,6 +14618,7 @@
     function updateCloudLine(){ var el = cq("cloudLine"); if (el) el.textContent = cloudLineText(); }
     function cloudPush(why, opts){
       opts = opts || {};
+      if (typeof RACE !== "undefined" && RACE.on){ if (opts.done) setTimeout(opts.done, 0); return; }   // never sync a race-state game over the real profile
       function fin(){ if (opts.done) setTimeout(opts.done, 0); }
       if (!cloudActive() || cloud.paused || cloudBusy){ fin(); return; }
       var snap = makeSnap(), json = JSON.stringify(snap);
@@ -15063,7 +15118,8 @@
       { k:"robs",      label:"ROBBERIES",  icon:"🕶️" }, { k:"deals",   label:"DEALS",      icon:"🤝" }, { k:"biggest", label:"BEST DAY",   icon:"🔥", usd:1 },
       { k:"clout",     label:"CLOUT",      icon:"⭐" }, { k:"season",  label:"THIS WEEK",  icon:"📅" }, { k:"contracts", label:"CONTRACTS", icon:"📋" },
       { k:"traps",     label:"TRAP HOUSES",icon:"🏚️" }, { k:"hoods",   label:"HOODS HELD", icon:"🗺️" }, { k:"busts",   label:"BUSTS",      icon:"🚔" },
-      { k:"er",        label:"ER TRIPS",   icon:"🏥" }, { k:"days",    label:"DAYS",       icon:"🗓️" }
+      { k:"er",        label:"ER TRIPS",   icon:"🏥" }, { k:"days",    label:"DAYS",       icon:"🗓️" },
+      { k:"mpwins",    label:"RACE WINS",  icon:"🏁" }, { k:"mpraces", label:"RACES",      icon:"🏎️" }, { k:"mpbest",  label:"BEST RACE",  icon:"💰", usd:1 }
     ];
     var BD = { scope:null, sort:"empire", cache:{}, shown:40, legacy:false, jump:false };
     function bdScope(){ return BD.scope || (cloudOn() ? "world" : "local"); }
@@ -15187,6 +15243,697 @@
       if (menu !== "hud") { toast("Finish what you're doing first."); }
     }
     document.addEventListener("keydown", function(ev){ if (ev.key === "Escape" && menu === "hud" && hudKind === "board") closeMenu(); });
+
+
+    /* ======================= RACK RACE module ======================= */
+    /* =====================================================================================================================
+       RACK RACE — Winton Terrace ("THE T")
+       2–4 racers, first to BANK $1,000,000 (or the highest bank at 10:00). One central SPOT supplies everybody; four trap houses sit the same
+       distance from it, one per racer. Cash only comes from licks, buyer cars and NPC deals. Pocket cash is at risk until STASHED at your own trap house;
+       arrest or death wipes it and respawns you in front of your own trap. Rivals can be BOTS (always available), friends or random players online.
+       All tuning lives in RACE_CFG so it can be re-tuned without digging through the code. Nothing in a race touches your real save.
+       ===================================================================================================================== */
+    var RACE_CFG = {
+      target:1000000,          // FFA: first to bank this wins
+      teamTarget:1500000,      // 2v2: a team's COMBINED bank that wins
+      seconds:600,             // race length (10:00)
+      payMul:6,               // every earn() inside the race (licks, buyer cars, NPC deals) is multiplied by this
+      licks:11,                // lick count on the block (base game: 7) — "several active at once"
+      lickSpeed:2.4,           // lick offer timers run this much faster (they are back in ~10–20 s)
+      buyerRespawn:[15, 30], buyerFirst:[6, 12],   // buyer cars (base game: 55–100 s)
+      dbEvery:[45, 75], dbLateMul:0.7, dbLateSecs:180,   // drive-by scheduler for YOU: every 45–75 s, tighter in the last 3 minutes
+      dbDodgePenalty:0.18, dbBand:420,               // drive-bys hit a bit more often than the base game, and the danger lane is wider
+      respawnProtect:5,        // seconds of no-target protection after a respawn
+      catchUp:true, catchUpSecs:180, catchUpMul:1.25,   // last place, final 3 minutes: lick payouts +25% (invisible)
+      startLoadFrac:1,         // The Spot gives a full load; restock is free
+      stashClearsHeat:true,
+      bot:{ rate:[12000, 17000], work:[8, 15], stashAt:[16000, 52000], walkSpeed:280, dbEvery:[50, 85], dbHit:0.3, arrestEvery:[70, 120], arrestHit:0.4, downSecs:4 }
+    };
+    var RACE_SLOTS = [ { label:"P1", color:"#e63946" }, { label:"P2", color:"#3a86ff" }, { label:"P3", color:"#2ecc71" }, { label:"P4", color:"#ffd23f" } ];
+    var T_SPOT = { x:1500, y:1090 };   // The Spot's front door: every trap-house door is exactly the same distance from here
+    var T_HOUSES = [ { x:442, y:346 }, { x:2242, y:346 }, { x:442, y:1246 }, { x:2242, y:1246 } ];   // NW, NE, SW, SE lots (door = x+158, y+294)
+    var RACE = { on:false, phase:"off", mode:"ffa", fill:true, players:[], me:null, t:0, left:RACE_CFG.seconds, feed:[], snap:null, prePos:null, result:null, cd:0,
+                 menu:{ view:"main", err:"", code:"", busy:false }, dbT:30, leaveArm:0, net:null, hudAt:0 };
+    function raceRun(){ return RACE.on && RACE.phase === "run"; }
+    function raceHouseDoor(i){ var h = T_HOUSES[i]; return { x:h.x + 158, y:h.y + 294 }; }
+    function raceSpawnAt(i){ var d = raceHouseDoor(i); return { x:d.x, y:d.y + 52 }; }
+
+    /* ---- the T's layout: The Spot dead centre of the plaza, four trap houses at the corners, equidistant ---- */
+    function tLayout(){
+      function put(id, nx, ny){ var b = buildingById(id); if (!b) return; var ox = b.door.x - b.x, oy = b.door.y - b.y; b.x = nx; b.y = ny; b.door = { x:nx + ox, y:ny + oy }; }
+      put("store", 900, 380); put("club", 1640, 375); put("apt", 110, 880); put("hotel", 830, 1430); put("auto", 1620, 1430); put("landmark", 2400, 930); put("bizbar", 800, 930); put("bizstore", 1700, 930);
+      var sp = buildingById("trap"); if (sp){ sp.w = 330; sp.h = 200; sp.x = 1335; sp.y = 851; sp.door = { x:T_SPOT.x, y:T_SPOT.y }; sp.sign = "THE SPOT"; sp.name = "THE SPOT — SUPPLY"; }
+      for (var i = buildings.length - 1; i >= 0; i--) if (/^rtrap/.test(buildings[i].id)) buildings.splice(i, 1);
+      for (var h = 0; h < 4; h++){
+        var col = RACE_SLOTS[h].color, tag = RACE_SLOTS[h].label, pl = raceP(h);
+        var b = h === 0 ? buildingById("traphouse") : { id:"rtrap" + h, name:"", sign:"", x:0, y:0, w:315, h:255, wall:"#5c6068", roof:"#33363d", door:{ x:0, y:0 } };
+        if (!b) continue;
+        b.x = T_HOUSES[h].x; b.y = T_HOUSES[h].y; b.w = 315; b.h = 255; b.door = raceHouseDoor(h);
+        b.wall = tone(col, 0.62); b.roof = tone(col, 0.34); b.sign = tag + " TRAP"; b.name = tag + (pl ? " · " + pl.name : "") + " TRAP HOUSE";
+        if (h > 0) buildings.push(b);
+      }
+    }
+    function removeRaceHouses(){ for (var i = buildings.length - 1; i >= 0; i--) if (/^rtrap/.test(buildings[i].id)) buildings.splice(i, 1); }
+
+    /* ---- slots & players ---- */
+    function raceMkPlayer(i, kind, name){
+      var L = LOOKS[(i * 2 + 1) % LOOKS.length], sp = raceSpawnAt(i);
+      return { id:i, label:RACE_SLOTS[i].label, color:RACE_SLOTS[i].color, name:name || RACE_SLOTS[i].label, kind:kind, team:RACE.mode === "teams" ? (i < 2 ? 0 : 1) : i, bank:0, pocket:0, down:0, protect:0, dnf:false,
+               x:sp.x, y:sp.y, face:1, walk:0, moving:false, r:16, skin:L.skin, shirt:L.shirt, pants:L.pants, hair:L.hair, accent:L.accent, shoes:L.shoes, skill:rand(0.78, 1.12), bot:null, lookIdx:(i * 2 + 1) % LOOKS.length };
+    }
+    function raceBuildPlayers(remote, mySlot){
+      mySlot = mySlot | 0; var pl = [null, null, null, null];
+      var me = raceMkPlayer(mySlot, "me", S.username ? String(S.username).toUpperCase().slice(0, 10) : "YOU"); pl[mySlot] = me;
+      var nextFree = function(){ for (var q = 0; q < 4; q++) if (!pl[q]) return q; return -1; };
+      (remote || []).forEach(function(r){
+        var slot = (r.slot != null && r.slot >= 0 && r.slot < 4 && !pl[r.slot]) ? r.slot : nextFree(); if (slot < 0) return;
+        var p = raceMkPlayer(slot, "remote", String(r.name || "PLAYER").toUpperCase().slice(0, 10)); p.peer = r.peer; p.lookIdx = r.look | 0;
+        var L = LOOKS[p.lookIdx] || LOOKS[0]; p.skin = L.skin; p.shirt = L.shirt; p.pants = L.pants; p.hair = L.hair; p.accent = L.accent; p.shoes = L.shoes; pl[slot] = p;
+      });
+      if (RACE.fill){ var bn = ["ACE", "DRE", "KILO", "NOVA", "ONYX", "SOSA"], off = randi(0, bn.length - 1), used = 0; for (var i = 0; i < 4; i++) if (!pl[i]) pl[i] = raceMkPlayer(i, "bot", "BOT " + bn[(off + used++) % bn.length]); }
+      return pl.filter(Boolean);
+    }
+    function raceEntries(){   // the standings: one entry per racer (FFA) or per team
+      var P = RACE.players, E;
+      if (RACE.mode === "teams"){
+        E = [0, 1].map(function(t){ var m = P.filter(function(p){ return p.team === t; }); return { key:"T" + t, label:"TEAM " + (t ? "B" : "A"), color:t ? "#2ecc71" : "#e63946", bank:m.reduce(function(a, p){ return a + p.bank; }, 0), players:m, dnf:m.every(function(p){ return p.dnf; }) }; });
+      } else E = P.map(function(p){ return { key:"P" + p.id, label:p.label + " " + p.name, color:p.color, bank:p.bank, players:[p], dnf:p.dnf }; });
+      E.sort(function(a, b){ return b.bank - a.bank; });
+      return E;
+    }
+    function raceTarget(){ return RACE.mode === "teams" ? RACE_CFG.teamTarget : RACE_CFG.target; }
+    function raceFeed(text, color, noNet){ RACE.feed.unshift({ t:performance.now(), text:text, color:color || "#fff" }); if (RACE.feed.length > 6) RACE.feed.length = 6; if (!noNet && RACE.net) raceNetSend({ t:"feed", text:text, color:color || "#fff" }); }
+    function raceP(i){ for (var q = 0; q < RACE.players.length; q++) if (RACE.players[q].id === i) return RACE.players[q]; return null; }
+
+    /* ---- The Spot: free supply for everybody ---- */
+    /* every product in the T is STARLIGHT: The Spot only ever supplies Starlight, and licks, buyer cars and NPC deals only ever want Starlight */
+    function raceLoad(){ S.inv = {}; S.invFrom = {}; S.inv.star = Math.max(10, Math.floor(invCap() * RACE_CFG.startLoadFrac)); S.invFrom.star = "spot"; }
+    function raceRestock(){
+      var held = invCount(), cap = invCap();
+      if (held >= cap * 0.7){ toast("You're stocked — go sell it."); return; }
+      raceLoad(); sndGood(); toast("THE SPOT — fresh supply, full pockets. Now go sell it (licks, buyer cars, deals) and STASH at your trap."); updateHUD();
+    }
+    /* ---- stash: the only bank in the T ---- */
+    function raceStash(){
+      var me = RACE.me; if (!raceRun() || !me || me.down) return;
+      var amt = Math.round(S.cash);
+      if (amt <= 0){ toast("Nothing in your pockets to stash — go sell."); return; }
+      S.cash = 0; me.bank += amt;
+      if (RACE_CFG.stashClearsHeat){ S.heat = 0; cop.mode = "patrol"; S.chaseLeft = 0; S.jackboy = null; try { cruiserStand(); } catch(e){} driveby = null; S.ghostTime = Math.max(S.ghostTime || 0, 1.5); }
+      sndCash(); addShake(3, 0.2);
+      raceFeed(me.label + " STASHED " + money(amt) + " → bank " + money(me.bank), me.color);
+      toast("STASHED " + money(amt) + " — banked " + money(me.bank) + ". Wanted level cleared.", true);
+      raceNetSend({ t:"bank", bank:me.bank });
+      raceCheckWin();
+    }
+    /* ---- arrest / death: unstashed cash gone, respawn in front of YOUR OWN trap house ---- */
+    function raceDown(kind, why){
+      var me = RACE.me; if (!raceRun() || !me || me.down) return;
+      var lost = Math.round(S.cash); S.cash = 0; S.heat = 0; me.down = 1;
+      raceFeed(me.label + " " + (kind === "police" ? "ARRESTED" : "DOWN") + " — " + money(lost) + " unstashed cash gone (" + why + ")", me.color);
+      toast((kind === "police" ? "BUSTED" : "DOWN") + " — " + money(lost) + " in unstashed cash is GONE. You respawn at your own trap.", true);
+      raceNetSend({ t:"down", kind:kind });
+      var fin = function(){ raceRespawn(); };
+      if (kind === "police") startRescue({ kind:"police", vtype:"cruiser", vcolor:"#23232e", toast:null, crew:officerLook, onFinish:fin });
+      else startRescue({ kind:"ambulance", vtype:"ambulance", vcolor:"#f4f6fa", toast:null, crew:function(i){ return i ? medicLook("#e0ac69", "#2a1b12") : medicLook("#8d5524", "#101014"); }, onFinish:fin });
+    }
+    function raceRespawn(){
+      var me = RACE.me; if (!me) return;
+      var sp = raceSpawnAt(me.id);
+      me.down = 0; me.protect = RACE_CFG.respawnProtect;
+      player.x = sp.x; player.y = sp.y; player.vx = 0; player.vy = 0; camPos.x = null; S.driving = false;
+      S.heat = 0; cop.mode = "patrol"; S.jackboy = null; S.chaseLeft = 0; S.threatCd = Math.max(S.threatCd || 0, 45); try { cruiserStand(); } catch(e){} driveby = null;
+      S.ghostTime = RACE_CFG.respawnProtect; setNpcCd("cop", 45); setNpcCd("jackboy", 45);
+      raceLoad();
+      raceNetSend({ t:"respawn" });
+    }
+    /* ---- win / end ---- */
+    function raceCheckWin(){
+      if (!raceRun()) return;
+      if (RACE.net && RACE.net.role === "guest") return;   // the host decides
+      var E = raceEntries(), tgt = raceTarget(), top = E[0];
+      if (top.bank >= tgt){
+        var winners = E.filter(function(e){ return e.bank === top.bank; });
+        raceEnd(winners, "target");
+      }
+    }
+    function raceEnd(winners, why){
+      if (RACE.phase === "over") return;
+      if (winners.length && winners[0].bank <= 0) winners = [];   // nobody banked a dollar: no contest, no win
+      RACE.phase = "over";
+      var E = raceEntries(), meE = null;
+      E.forEach(function(e, i){ e.rank = i + 1; if (e.players.indexOf(RACE.me) >= 0) meE = e; });
+      var won = !!meE && winners.some(function(w){ return w.key === meE.key; });
+      RACE.result = { winners:winners.map(function(w){ return w.label; }), why:why, entries:E.map(function(e){ return { label:e.label, bank:e.bank, color:e.color, dnf:e.dnf, rank:e.rank, members:e.players.map(function(p){ return p.label + " " + p.name; }) }; }), won:won, shared:winners.length > 1,
+                       myBank:RACE.me ? RACE.me.bank : 0, mode:RACE.mode, seconds:Math.round(RACE_CFG.seconds - RACE.left) };
+      raceNetSend({ t:"end", result:RACE.result });
+      sndGood(); addShake(6, 0.5);
+      RACE.menu.view = "results";
+      closeMenu(); openHud("race");
+    }
+    /* ---- start / finish ---- */
+    function raceBegin(remote, opts){
+      if (RACE.on) return;
+      opts = opts || {};
+      RACE.fill = opts.fill !== false;
+      RACE.players = raceBuildPlayers(remote, opts.mySlot | 0);
+      if (RACE.players.length < 2){ RACE.menu.err = "A race needs at least 2 racers — turn bots on or invite someone."; return; }
+      RACE.me = RACE.players.filter(function(p){ return p.kind === "me"; })[0];
+      // freeze the real game: snapshot S and the player's spot; nothing in the race is ever saved
+      RACE.snap = makeSnap(); RACE.prePos = { x:player.x, y:player.y };
+      suppressSave = true; RACE.on = true; RACE.phase = "count"; RACE.cd = 3.4; RACE.t = 0; RACE.left = RACE_CFG.seconds; RACE.feed = []; RACE.result = null; RACE.dbT = rand(RACE_CFG.dbEvery[0], RACE_CFG.dbEvery[1]) * 0.6;
+      closeMenu();
+      var me = RACE.me;
+      S.district = "winton"; ensurePrices("winton");
+      S.cash = 0; S.bank = 0; S.heat = 0; S.clout = Math.max(40, S.clout || 0); S.tierIdx = Math.max(S.tierIdx || 0, 1); S.gunTier = Math.max(S.gunTier | 0, 2); S.car = null; S.bagTier = Math.max(S.bagTier | 0, 4); S.driving = false; S.crew = { enforcers:0 }; S.traps = {}; S.held = {};
+      S.contract = null; S.mission = null; S.quest = "none"; S.spotJob = null; S.spotBoard = []; S.inv = {}; S.invFrom = {}; S.jackboy = null; S.threatCd = 20; S.minutes = 14 * 60; S.ghostTime = 0; S.power = null; S.escortT = 0; S.holedUp = false;
+      driveby = null; try { cruiserStand(); } catch(e){} buyerCar = null; buyerTimer = rand(RACE_CFG.buyerFirst[0], RACE_CFG.buyerFirst[1]); hit = null; tow = null; plugRun = null; plugVan = null; npcFight = null; oppAmb = null;
+      applyHoodLayout(); spawnLicks();
+      var sp = raceSpawnAt(me.id); player.x = sp.x; player.y = sp.y; player.vx = 0; player.vy = 0; camPos.x = null;
+      raceLoad();
+      RACE.players.forEach(function(p){ if (p.kind === "bot") raceBotInit(p); });
+      RACE.dbT = rand(RACE_CFG.dbEvery[0], RACE_CFG.dbEvery[1]);
+      document.body.classList.add("racing"); raceHudEnsure();
+      updateHUD();
+    }
+    function raceExit(){
+      if (!RACE.on) return;
+      var res = RACE.result;
+      RACE.on = false; RACE.phase = "off"; document.body.classList.remove("racing");
+      var snap = RACE.snap; RACE.snap = null;
+      if (snap){
+        S = snap; S.jackboy = null; S.ship = null; S.beamTrvp = null; S.cloutFx = []; S.driving = false; S.holedUp = false;
+        driveby = null; try { cruiserStand(); } catch(e){} buyerCar = null; hit = null; tow = null; plugRun = null; plugVan = null; npcFight = null; oppAmb = null; rescue = null;
+        applyHoodLayout(); spawnLicks(); placeEnforcers();
+        if (RACE.prePos){ player.x = RACE.prePos.x; player.y = RACE.prePos.y; player.vx = 0; player.vy = 0; camPos.x = null; }
+        if (res){   // multiplayer stats ride the REAL save
+          bumpStat("mpraces", 1); if (res.won) bumpStat("mpwins", 1);
+          if (!S.stats) S.stats = {}; S.stats.mpbest = Math.max(S.stats.mpbest | 0, Math.round(res.myBank));
+          toast(res.won ? "🏁 YOU WON THE RACE" + (res.shared ? " (shared)" : "") + "! Back to your own game — it's exactly as you left it." : "Race over — back to your own game, exactly as you left it.", true);
+        }
+      }
+      suppressSave = false; RACE.players = []; RACE.me = null; RACE.result = null;
+      raceNetClose();
+      var el = document.getElementById("raceHud"); if (el) el.style.display = "none";
+      closeMenu(); updateHUD(); try { saveGame(); } catch(e){}
+    }
+    function raceLeave(){   // leaving mid-race = DNF: your bank freezes on the board, the race goes on without you (you go back to your own game)
+      if (!RACE.on) return;
+      if (RACE.phase === "run" && RACE.me){ RACE.me.dnf = true; raceNetSend({ t:"leave" }); }
+      RACE.result = RACE.phase === "run" ? null : RACE.result;
+      raceExit();
+    }
+
+    /* ---- per-frame: clock, bots, scheduler (runs even while a menu or a rescue scene is up — a race can't pause) ---- */
+    function updateRace(dt){
+      if (!RACE.on) return;
+      S.minutes = 14 * 60;   // the real game's clock is frozen during a race
+      if (RACE.phase === "count"){
+        RACE.cd -= dt;
+        if (RACE.cd <= 0){ RACE.phase = "run"; sndGood(); toast("GO! First to " + money(raceTarget()) + " banked wins.", true); raceFeed("GO!", "#5eead4", true); }
+        return;
+      }
+      if (RACE.phase !== "run") return;
+      RACE.t += dt; RACE.left = Math.max(0, RACE.left - dt);
+      var me = RACE.me;
+      if (me){ if (me.protect > 0) me.protect -= dt; me.pocket = Math.round(S.cash); }
+      var guestNet = !!(RACE.net && RACE.net.role === "guest");
+      RACE.players.forEach(function(p){ if (p.kind === "bot" && !guestNet) raceBotTick(p, dt); });
+      raceNetTick(dt);
+      // drive-by pressure on YOU
+      if (me && !me.down && !rescue && !battleState && !dialogue){
+        RACE.dbT -= dt;
+        if (RACE.dbT <= 0){
+          var late = RACE.left < RACE_CFG.dbLateSecs ? RACE_CFG.dbLateMul : 1;
+          RACE.dbT = rand(RACE_CFG.dbEvery[0], RACE_CFG.dbEvery[1]) * late;
+          if (!driveby && me.protect <= 0 && !S.holedUp) startDriveby({});
+        }
+      }
+      if (guestNet) return;   // the host owns the clock and the win check
+      if (RACE.left <= 0){
+        var E = raceEntries(), topBank = E[0].bank, winners = E.filter(function(e){ return e.bank === topBank; });
+        raceEnd(winners, "time");
+      } else raceCheckWin();
+    }
+    /* ---- bots: always-available rivals. They run the same loop you do (Spot → work the block → stash at THEIR trap) with risk of drive-bys and arrests. ---- */
+    function raceBotInit(p){
+      var sp = raceSpawnAt(p.id);
+      p.x = sp.x; p.y = sp.y;
+      p.bot = { state:"toWork", t:0, work:0, pocket:0, tx:0, ty:0, stashAt:rand(RACE_CFG.bot.stashAt[0], RACE_CFG.bot.stashAt[1]), dbT:rand(RACE_CFG.bot.dbEvery[0], RACE_CFG.bot.dbEvery[1]), arT:rand(RACE_CFG.bot.arrestEvery[0], RACE_CFG.bot.arrestEvery[1]) };
+      raceBotPickWork(p);
+    }
+    /* bots follow the street network between stops (no getting stuck behind a building) and hop to the next waypoint if they stall */
+    function raceBotGoto(p, tx, ty){
+      var b = p.bot, a = nearestRoadPoint(p.x, p.y), z = nearestRoadPoint(tx, ty), mid = [];
+      try { mid = carRoute(a.x, a.y, z.x, z.y) || []; } catch(e){}
+      b.route = [{ x:a.x, y:a.y }].concat(mid).concat([{ x:z.x, y:z.y }, { x:tx, y:ty }]); b.tx = tx; b.ty = ty; b.stuckT = 0; b.lx = p.x; b.ly = p.y;
+    }
+    function raceBotPickWork(p){
+      var L = licks.length ? licks[randi(0, licks.length - 1)] : { x:T_SPOT.x + rand(-300, 300), y:T_SPOT.y + rand(-100, 300) };
+      raceBotGoto(p, clamp(L.x + rand(-60, 60), 140, WORLD_W - 140), clamp(L.y + rand(-40, 60), 140, WORLD_H - 140));
+    }
+    function raceBotWalk(p, dt){
+      var b = p.bot; if (!b.route || !b.route.length) return true;
+      var head = b.route[0], px = p.x, arrived = chaseStep(p, head.x, head.y, RACE_CFG.bot.walkSpeed, dt, 20);
+      p.moving = !arrived; if (p.x !== px) p.face = p.x > px ? 1 : -1; p.walk += dt * 9;
+      if (arrived) b.route.shift();
+      b.stuckT += dt;
+      if (b.stuckT >= 1.5){ if (dist(p.x, p.y, b.lx, b.ly) < 24 && b.route.length){ var nx = b.route[0]; p.x = nx.x; p.y = nx.y; } b.stuckT = 0; b.lx = p.x; b.ly = p.y; }
+      return b.route.length === 0;
+    }
+    function raceBotDown(p, kind){
+      var b = p.bot, lost = Math.round(b.pocket);
+      raceFeed(p.label + " " + (kind === "police" ? "ARRESTED" : "GOT HIT") + (lost ? " — lost " + money(lost) : ""), p.color);
+      b.pocket = 0; b.state = "down"; b.t = 0; p.down = 1; p.moving = false;
+      try { startOppAmbulance({ skin:p.skin, shirt:p.shirt, pants:p.pants, hair:p.hair, accent:p.accent, shoes:p.shoes }, p.name, { x:p.x, y:p.y, sx:p.x > WORLD_W / 2 ? 1 : -1 }, kind === "police" ? "police" : "ambulance"); } catch(e){}
+    }
+    function raceBotTick(p, dt){
+      var b = p.bot; if (!b || p.dnf) return;
+      if (p.protect > 0) p.protect -= dt;
+      var mulCatch = 1, ent = raceEntries(), last = ent[ent.length - 1];
+      if (b.state === "down"){
+        b.t += dt;
+        if (b.t >= RACE_CFG.bot.downSecs){ var sp = raceSpawnAt(p.id); p.x = sp.x; p.y = sp.y; p.down = 0; p.protect = RACE_CFG.respawnProtect; b.state = "toSpot"; raceBotGoto(p, T_SPOT.x + rand(-80, 80), T_SPOT.y + 48); b.loaded = false; }
+        return;
+      }
+      // risk: drive-bys and arrests find bots too (not while protected or inside their own door)
+      b.dbT -= dt; b.arT -= dt;
+      if (p.protect <= 0 && b.pocket > 0){
+        if (b.dbT <= 0){ b.dbT = rand(RACE_CFG.bot.dbEvery[0], RACE_CFG.bot.dbEvery[1]) * (RACE.left < RACE_CFG.dbLateSecs ? RACE_CFG.dbLateMul : 1); if (Math.random() < RACE_CFG.bot.dbHit) return raceBotDown(p, "ambulance"); }
+        if (b.arT <= 0){ b.arT = rand(RACE_CFG.bot.arrestEvery[0], RACE_CFG.bot.arrestEvery[1]); if (Math.random() < RACE_CFG.bot.arrestHit) return raceBotDown(p, "police"); }
+      }
+      var hd = raceHouseDoor(p.id), hdg = { x:hd.x, y:hd.y + 36 };
+      if (b.state === "toSpot"){
+        if (raceBotWalk(p, dt)){ b.loaded = true; b.state = "toWork"; raceBotPickWork(p); }
+      } else if (b.state === "toWork"){
+        if (raceBotWalk(p, dt)){ b.state = "work"; b.t = 0; b.work = rand(RACE_CFG.bot.work[0], RACE_CFG.bot.work[1]); p.moving = false; }
+      } else if (b.state === "work"){
+        p.moving = false; b.t += dt;
+        var rate = rand(RACE_CFG.bot.rate[0], RACE_CFG.bot.rate[1]) * p.skill * (last && last.players.indexOf(p) >= 0 && RACE.left < RACE_CFG.catchUpSecs ? RACE_CFG.catchUpMul : 1);
+        b.pocket += rate * dt;
+        if (b.t >= b.work){
+          if (b.pocket >= b.stashAt){ b.state = "toDoor"; raceBotGoto(p, hdg.x, hdg.y); }
+          else { b.state = "toWork"; raceBotPickWork(p); }
+        }
+      } else if (b.state === "toDoor"){
+        if (raceBotWalk(p, dt)){
+          var amt = Math.round(b.pocket); b.pocket = 0; p.bank += amt; p.moving = false;
+          raceFeed(p.label + " STASHED " + money(amt) + " → bank " + money(p.bank), p.color);
+          b.stashAt = rand(RACE_CFG.bot.stashAt[0], RACE_CFG.bot.stashAt[1]); p.protect = Math.max(p.protect, 1.5);
+          b.state = "toSpot"; raceBotGoto(p, T_SPOT.x + rand(-80, 80), T_SPOT.y + 48);
+          raceCheckWin();
+        }
+      }
+      p.pocket = Math.round(b.pocket);
+    }
+
+    /* ---- HUD: timer, live standings (rank, colour, label, banked total), your pocket cash, the feed that explains every change ---- */
+    function raceHudEnsure(){
+      var el = document.getElementById("raceHud");
+      if (!el){
+        el = document.createElement("div"); el.id = "raceHud";
+        el.style.cssText = "position:absolute; left:8px; top:8px; z-index:30; min-width:210px; max-width:min(46vw,300px); font-family:Nunito,sans-serif; pointer-events:none;";
+        var host = document.getElementById("stage") || document.body; host.appendChild(el);
+        var cd = document.createElement("div"); cd.id = "raceCount"; cd.style.cssText = "position:absolute; left:0; right:0; top:28%; z-index:40; text-align:center; font:900 96px Bungee,Nunito,sans-serif; color:#fff; text-shadow:0 4px 0 #14161d,0 0 24px #000; pointer-events:none; display:none";
+        host.appendChild(cd);
+      }
+      el.style.display = "block";
+    }
+    function raceFmtTime(s){ s = Math.max(0, Math.ceil(s)); return Math.floor(s / 60) + ":" + ("0" + (s % 60)).slice(-2); }
+    function raceHudRender(){
+      var el = document.getElementById("raceHud"); if (!el || !RACE.on) return;
+      var E = raceEntries(), me = RACE.me, now = performance.now(), h = "";
+      var box = "background:rgba(20,22,29,.86); border:2px solid #000; border-radius:10px; padding:6px 8px; color:#fff; margin-bottom:5px;";
+      h += '<div style="' + box + 'display:flex; justify-content:space-between; align-items:center; gap:8px"><b style="font:900 20px Bungee,Nunito,sans-serif; color:' + (RACE.left < 60 ? "#ff6b6b" : "#5eead4") + '">' + raceFmtTime(RACE.phase === "count" ? RACE_CFG.seconds : RACE.left) + '</b><span style="font-size:11px; font-weight:900; text-align:right">FIRST TO ' + money(raceTarget()) + (RACE.mode === "teams" ? " (TEAM)" : "") + '</span></div>';
+      h += '<div style="' + box + '">';
+      E.forEach(function(e, i){
+        var mine = me && e.players.indexOf(me) >= 0, pct = clamp(e.bank / raceTarget(), 0, 1) * 100;
+        h += '<div style="display:flex; align-items:center; gap:6px; font-size:12px; font-weight:900; margin:2px 0; ' + (mine ? "background:rgba(255,255,255,.14); border-radius:6px; padding:1px 3px" : "") + '"><span style="min-width:14px">' + (i + 1) + '</span><span style="width:11px; height:11px; border-radius:50%; background:' + e.color + '; border:1.5px solid #fff; flex:0 0 auto"></span>' +
+          '<span style="flex:1; white-space:nowrap; overflow:hidden; text-overflow:ellipsis">' + esc(e.label) + (e.dnf ? " · DNF" : "") + '</span><span>' + bdCompact(e.bank, 1) + '</span></div>' +
+          '<div style="height:3px; background:rgba(255,255,255,.18); border-radius:2px; margin:0 0 2px 20px"><div style="width:' + pct.toFixed(1) + '%; height:3px; background:' + e.color + '; border-radius:2px"></div></div>';
+      });
+      h += '</div>';
+      if (me){
+        h += '<div style="' + box + 'font-size:12px; font-weight:900"><span style="color:' + me.color + '">' + me.label + ' POCKET</span> <b style="font-size:15px">' + money(Math.round(S.cash)) + '</b><br><small style="font-weight:800; color:#ffb4b4">at risk until you stash at your trap</small>' + (me.protect > 0 ? '<br><small style="color:#5eead4">protected ' + Math.ceil(me.protect) + 's</small>' : "") + '</div>';
+      }
+      var feed = RACE.feed.filter(function(f){ return now - f.t < 9000; }).slice(0, 4);
+      if (feed.length){ h += '<div style="font-size:11px; font-weight:800; color:#fff; text-shadow:0 1px 2px #000; line-height:1.3">'; feed.forEach(function(f){ h += '<div style="opacity:' + clamp(1 - (now - f.t) / 9000, 0.35, 1).toFixed(2) + '; color:' + f.color + '">' + esc(f.text) + '</div>'; }); h += '</div>'; }
+      h += '<div style="pointer-events:auto; margin-top:4px"><button type="button" id="raceLeaveBtn" class="gbtn" style="font-size:11px; padding:4px 8px">' + (RACE.leaveArm > now ? "TAP AGAIN — LEAVE (DNF)" : "✕ LEAVE RACE") + '</button></div>';
+      el.innerHTML = h;
+      var lb = document.getElementById("raceLeaveBtn");
+      if (lb) lb.addEventListener("click", function(){ var n = performance.now(); if (RACE.leaveArm > n) raceLeave(); else { RACE.leaveArm = n + 3000; raceHudRender(); } });
+      var cdEl = document.getElementById("raceCount");
+      if (cdEl){ if (RACE.phase === "count"){ cdEl.style.display = "block"; cdEl.textContent = String(Math.max(1, Math.ceil(RACE.cd - 0.4))); } else if (RACE.phase === "run" && RACE.t < 1.1){ cdEl.style.display = "block"; cdEl.textContent = "GO!"; } else cdEl.style.display = "none"; }
+    }
+    function raceHudTick(){ if (!RACE.on) return; var n = performance.now(); if (n - RACE.hudAt > 200){ RACE.hudAt = n; raceHudRender(); } }
+
+    /* ---- drawing: bots, trap-house banners, The Spot ring, protection halo ---- */
+    function drawRace(ents){
+      if (!RACE.on) return;
+      var tnow = performance.now() / 1000;
+      for (var h = 0; h < 4; h++){ (function(i){
+        var d = raceHouseDoor(i), pl = raceP(i), col = RACE_SLOTS[i].color, mine = RACE.me && RACE.me.id === i;
+        ents.push({ x:d.x, y:d.y + 20, fn:function(){
+          ctx.save(); ctx.globalAlpha = mine ? 0.55 + 0.25 * Math.sin(tnow * 4) : 0.35; ctx.strokeStyle = col; ctx.lineWidth = mine ? 6 : 4; ctx.beginPath(); ctx.ellipse(d.x, d.y + 22, 52, 20, 0, 0, Math.PI * 2); ctx.stroke(); ctx.restore();
+          ctx.font = "900 15px Nunito, sans-serif"; ctx.textAlign = "center"; ctx.lineWidth = 4; ctx.strokeStyle = "rgba(0,0,0,.85)";
+          var tag = RACE_SLOTS[i].label + (pl ? " · " + pl.name : "") + (mine ? " (YOU)" : ""); ctx.strokeText(tag, d.x, d.y + 62); ctx.fillStyle = col; ctx.fillText(tag, d.x, d.y + 62);
+          if (mine){ ctx.font = "900 11px Nunito, sans-serif"; ctx.fillStyle = "#fff"; ctx.strokeText("A: STASH", d.x, d.y + 78); ctx.fillText("A: STASH", d.x, d.y + 78); }
+        } });
+      })(h); }
+      ents.push({ x:T_SPOT.x, y:T_SPOT.y + 20, fn:function(){
+        ctx.save(); ctx.globalAlpha = 0.4 + 0.25 * Math.sin(tnow * 3); ctx.strokeStyle = "#ffd23f"; ctx.lineWidth = 5; ctx.beginPath(); ctx.ellipse(T_SPOT.x, T_SPOT.y + 24, 70, 26, 0, 0, Math.PI * 2); ctx.stroke(); ctx.restore();
+        ctx.font = "900 13px Nunito, sans-serif"; ctx.textAlign = "center"; ctx.lineWidth = 4; ctx.strokeStyle = "rgba(0,0,0,.85)"; ctx.strokeText("THE SPOT · FREE SUPPLY", T_SPOT.x, T_SPOT.y + 68); ctx.fillStyle = "#ffd23f"; ctx.fillText("THE SPOT · FREE SUPPLY", T_SPOT.x, T_SPOT.y + 68);
+      } });
+      RACE.players.forEach(function(p){
+        if (p.kind === "me" || p.dnf) return;
+        if (p.down && p.kind === "bot") return;   // being carried off by the medics / cruiser
+        ents.push({ x:p.x, y:p.y, fn:function(){
+          drawPerson(p, { skin:p.skin, shirt:p.shirt, pants:p.pants, hair:p.hair, name:p.label + " " + p.name, role:"rival", accent:p.color, shoes:p.shoes });
+          ctx.save(); ctx.strokeStyle = p.color; ctx.lineWidth = 3; ctx.beginPath(); ctx.arc(p.x, p.y + 4, 26, 0, Math.PI * 2); ctx.stroke(); ctx.restore();
+          if (p.protect > 0){ ctx.save(); ctx.globalAlpha = 0.35; ctx.fillStyle = "#5eead4"; ctx.beginPath(); ctx.arc(p.x, p.y + 4, 30, 0, Math.PI * 2); ctx.fill(); ctx.restore(); }
+        } });
+      });
+    }
+    /* ---- the MULTIPLAYER MENU (opens when you enter the T) ---- */
+    function openRaceMenu(){
+      if (RACE.on){ return; }
+      if (battleState || dialogue || rescue){ toast("Finish what you're doing first."); return; }
+      RACE.menu = { view:"main", err:"", code:"", busy:false, lobby:null, searching:0 };
+      openHud("race");
+    }
+    function raceBack(){ raceNetClose(); RACE.menu.view = "main"; RACE.menu.lobby = null; RACE.menu.err = ""; RACE.menu.searching = 0; }
+    function raceRefreshMenu(){ if (menu === "hud" && hudKind === "race"){ var sc = hudPopEl.scrollTop; renderHud(); hudPopEl.scrollTop = sc; } }
+    function raceModeBtns(){
+      return hudBtn("FREE FOR ALL", RACE.mode === "ffa" ? "buy" : "", hudDo(function(){ RACE.mode = "ffa"; }), false) + hudBtn("TEAMS 2v2", RACE.mode === "teams" ? "buy" : "", hudDo(function(){ RACE.mode = "teams"; }), false);
+    }
+    function hudRaceHtml(){
+      var M = RACE.menu, h = "", st = S.stats || {};
+      if (M.view === "results" && RACE.result){
+        var R = RACE.result;
+        h += hudHead(R.won ? "🏁 YOU WON" + (R.shared ? " — SHARED WIN" : "") + "!" : "🏁 RACE OVER");
+        h += '<p class="drumor">' + (R.why === "target" ? "Someone banked " + money(raceTarget()) + "." : R.why === "host-left" ? "The host disconnected — final standings." : "Time's up — highest bank wins.") + (R.winners.length ? " Winner" + (R.winners.length > 1 ? "s" : "") + ": <b>" + esc(R.winners.join(" & ")) + "</b>" + (R.shared ? " (tie — shared win)" : "") : " Nobody banked anything — no winner.") + "</p>";
+        R.entries.forEach(function(e){ h += hudRow("#" + e.rank + " " + e.label + (e.dnf ? " · DNF" : ""), money(e.bank), e.members.join(" · "), ""); });
+        h += hudRow("YOUR RACE", money(R.myBank), "Banked " + money(R.myBank) + " in " + raceFmtTime(R.seconds) + ". Win/race stats are saved to your real profile.", hudBtn("DONE — BACK TO MY GAME", "buy", function(){ raceExit(); }, false));
+        return h;
+      }
+      if (M.view === "lobby" && M.lobby){
+        var L = M.lobby;
+        h += hudHead("🏁 LOBBY" + (L.code ? " — CODE " + L.code : ""));
+        h += '<p class="drumor">' + (RACE.mode === "teams" ? "TEAMS 2v2 — P1+P2 vs P3+P4. Team total to " + money(RACE_CFG.teamTarget) : "FREE FOR ALL — first to bank " + money(RACE_CFG.target)) + " · 10:00 limit · bots " + (RACE.fill ? "fill empty slots" : "OFF") + "</p>";
+        var mem = [{ name:S.username ? String(S.username).toUpperCase() : "YOU", you:true }].concat(L.members || []);
+        for (var i = 0; i < 4; i++){
+          var m = mem[i], col = RACE_SLOTS[i].color;
+          var nm = m ? esc(m.name) + (m.you ? " (YOU)" : "") + (m.host ? " · HOST" : "") : (RACE.fill ? "🤖 BOT (fills this slot)" : "…waiting for a player");
+          h += hudRow('<span style="color:' + col + '">● ' + RACE_SLOTS[i].label + "</span> " + nm, RACE.mode === "teams" ? (i < 2 ? "TEAM A" : "TEAM B") : "", "", "");
+        }
+        if (L.status) h += '<p class="popfoot">' + esc(L.status) + "</p>";
+        h += '<div style="display:flex; gap:6px; flex-wrap:wrap; margin-top:8px">' + hudBtn("BOTS: " + (RACE.fill ? "ON" : "OFF"), RACE.fill ? "buy" : "", hudDo(function(){ RACE.fill = !RACE.fill; }), !!L.guest) + raceModeBtns().replace(/data-hact/g, "data-hact") + "</div>";
+        h += '<div style="display:flex; gap:6px; flex-wrap:wrap; margin-top:8px">' + hudBtn(L.guest ? "WAITING FOR HOST…" : "▶ START RACE", "buy", function(){ raceLobbyStart(); }, !!L.guest) + hudBtn("LEAVE LOBBY", "", hudDo(function(){ raceBack(); }), false) + "</div>";
+        if (M.err) h += '<p class="popfoot" style="color:#ff8b8b">' + esc(M.err) + "</p>";
+        return h;
+      }
+      if (M.view === "join"){
+        h += hudHead("JOIN WITH CODE");
+        h += '<p class="drumor">Enter your friend\'s 4-letter room code.</p><div style="display:flex; gap:6px; margin:6px 0"><input id="raceCodeIn" maxlength="4" autocomplete="off" autocapitalize="characters" spellcheck="false" value="' + esc(M.code || "") + '" style="flex:1; font:900 22px Bungee,Nunito,sans-serif; letter-spacing:6px; text-transform:uppercase; padding:8px; border:3px solid var(--line); border-radius:10px; background:var(--panel); color:var(--ink)" placeholder="ABCD"></div>';
+        h += '<div style="display:flex; gap:6px; flex-wrap:wrap">' + hudBtn(M.busy ? "JOINING…" : "JOIN", "buy", function(){ var v = (document.getElementById("raceCodeIn") || {}).value || ""; M.code = v.toUpperCase().replace(/[^A-Z]/g, "").slice(0, 4); raceJoin(M.code); }, !!M.busy) + hudBtn("BACK", "", hudDo(function(){ raceBack(); }), false) + "</div>";
+        if (M.err) h += '<p class="popfoot" style="color:#ff8b8b">' + esc(M.err) + "</p>";
+        return h;
+      }
+      // main
+      h += hudHead("🏁 RACK RACE — WINTON TERRACE (THE T)");
+      h += '<p class="drumor">First to <b>bank ' + money(RACE_CFG.target) + '</b> wins — or the highest bank at <b>10:00</b>. <b>THE SPOT</b> in the middle supplies everybody; your trap house is the same distance away as everyone else\'s. Sell to licks, buyer cars and NPC deals, then <b>STASH</b> at your own trap house. Cops, jackboys and drive-bys wipe unstashed cash. Your real game stays frozen until you leave.</p>';
+      h += hudRow("YOUR RACE STATS", "", (st.mpraces | 0) + " races · " + (st.mpwins | 0) + " wins · best bank " + money(st.mpbest | 0), "");
+      h += hudRow("MODE", "", RACE.mode === "teams" ? "2v2 — team banks combine; first team to " + money(RACE_CFG.teamTarget) + " wins" : "Free for all — every racer for themselves", raceModeBtns());
+      h += hudRow("BOTS", "", "Bots fill empty slots so there's always a race.", hudBtn("FILL WITH BOTS: " + (RACE.fill ? "ON" : "OFF"), RACE.fill ? "buy" : "", hudDo(function(){ RACE.fill = !RACE.fill; }), false));
+      h += hudRow("FIND RACE", "", cloudOn() ? "Matchmaking: pairs you with waiting players (waits ~30 s for more); bots fill what's left." : "Online matchmaking isn't available here — you'll race bots.", hudBtn(M.searching ? "SEARCHING…" : "FIND RACE", "buy", function(){ raceFind(); }, !!M.searching));
+      h += hudRow("PLAY VS BOTS", "", "Instant race, no waiting.", hudBtn("PLAY VS BOTS", "", function(){ RACE.fill = true; M.view = "lobby"; M.lobby = { members:[], status:"Ready when you are." }; raceRefreshMenu(); }, false));
+      h += hudRow("HOST WITH CODE", "", cloudOn() ? "Private room: get a 4-letter code for friends." : "Needs the online lobby (not available here).", hudBtn("HOST WITH CODE", "", function(){ raceHost(); }, !cloudOn() || !!M.busy));
+      h += hudRow("JOIN WITH CODE", "", cloudOn() ? "Enter a friend's room code." : "Needs the online lobby (not available here).", hudBtn("JOIN WITH CODE", "", hudDo(function(){ M.view = "join"; M.err = ""; }), !cloudOn()));
+      h += hudRow("BACK", "", "Leave the T and return to your own game.", hudBtn("BACK", "", function(){ closeMenu(); }, false));
+      if (M.err) h += '<p class="popfoot" style="color:#ff8b8b">' + esc(M.err) + "</p>";
+      return h;
+    }
+    /* offline flow: FIND RACE with no server just short-circuits to the bot lobby after a beat */
+    function raceFind(){
+      var M = RACE.menu; M.err = "";
+      if (!cloudOn()){ M.searching = 1; raceRefreshMenu(); setTimeout(function(){ if (!M || RACE.on) return; M.searching = 0; M.view = "lobby"; M.lobby = { members:[], status:"Nobody else is queued — bots are filling the slots." }; RACE.fill = true; raceRefreshMenu(); }, 1800); return; }
+      raceNetFind();
+    }
+    function raceLobbyStart(){
+      var L = RACE.menu.lobby || {}, remote = (L.members || []).filter(function(m){ return !m.you; });
+      if (RACE.net && RACE.net.role === "host"){ raceNetHostStart(); return; }
+      raceBegin(remote, { fill:RACE.fill });
+    }
+    /* ---- online stubs (replaced by the real lobby + peer transport below) ---- */
+    function raceNetSend(msg){ if (RACE.net && RACE.net.send) RACE.net.send(msg); }
+    function raceNetTick(dt){ if (RACE.net && RACE.net.tick) RACE.net.tick(dt); }
+    function raceNetClose(){ if (RACE.net && RACE.net.close){ try { RACE.net.close(); } catch(e){} } RACE.net = null; }
+    /* =====================================================================================================================
+       ONLINE RACING — lobby on Supabase (rr_* functions, supabase_fix6.sql) + the race itself peer-to-peer (WebRTC via PeerJS).
+       Star topology: the HOST's browser runs the clock, the bots and the win check; every player simulates their own copy of the T (so nothing
+       about licks / cops / drive-bys has to be streamed) and sends their position + banked total ~10×/second. The host relays everyone to everyone.
+       If the host drops, the race ends on the current standings. Local testing without the internet: open two tabs on localhost with ?rrnet=bc.
+       ===================================================================================================================== */
+    var PEERJS_URL = "https://unpkg.com/peerjs@1.5.4/dist/peerjs.min.js";
+    var RR_FAKE = (function(){ try { var h = location.hostname; return (h === "localhost" || h === "127.0.0.1") && new URLSearchParams(location.search).get("rrnet") === "bc"; } catch(e){ return false; } })();
+    function FakePeer(id){
+      var self = this; this.id = id || ("fp" + Math.random().toString(36).slice(2, 8)); this.h = {}; this.conns = {};
+      this.bc = new BroadcastChannel("qck_fakepeer");
+      this.bc.onmessage = function(ev){
+        var m = ev.data; if (!m || m.to !== self.id) return;
+        if (m.k === "connect"){ var c = new FakeConn(self, m.from); self.conns[m.from] = c; self._emit("connection", c); setTimeout(function(){ c._emit("open"); }, 0); self.bc.postMessage({ k:"accept", from:self.id, to:m.from }); }
+        else if (m.k === "accept"){ var c2 = self.conns[m.from]; if (c2){ c2.isOpen = true; c2._emit("open"); } }
+        else if (m.k === "data"){ var c3 = self.conns[m.from]; if (c3) c3._emit("data", m.d); }
+        else if (m.k === "close"){ var c4 = self.conns[m.from]; if (c4){ delete self.conns[m.from]; c4._emit("close"); } }
+      };
+      setTimeout(function(){ self._emit("open", self.id); }, 0);
+    }
+    FakePeer.prototype.on = function(ev, fn){ (this.h[ev] = this.h[ev] || []).push(fn); return this; };
+    FakePeer.prototype._emit = function(ev, a){ (this.h[ev] || []).forEach(function(fn){ try { fn(a); } catch(e){ try { console.error(e); } catch(x){} } }); };
+    FakePeer.prototype.connect = function(id){ var c = new FakeConn(this, id); this.conns[id] = c; this.bc.postMessage({ k:"connect", from:this.id, to:id }); return c; };
+    FakePeer.prototype.destroy = function(){ var s = this; Object.keys(this.conns).forEach(function(k){ try { s.conns[k].close(); } catch(e){} }); try { this.bc.close(); } catch(e){} };
+    function FakeConn(owner, remote){ this.owner = owner; this.peer = remote; this.peerId = remote; this.h = {}; this.isOpen = false; }   // like PeerJS: conn.peer is the REMOTE peer's id
+    FakeConn.prototype.on = FakePeer.prototype.on; FakeConn.prototype._emit = FakePeer.prototype._emit;
+    FakeConn.prototype.send = function(d){ this.owner.bc.postMessage({ k:"data", from:this.owner.id, to:this.peerId, d:d }); };
+    FakeConn.prototype.close = function(){ try { this.owner.bc.postMessage({ k:"close", from:this.owner.id, to:this.peerId }); } catch(e){} delete this.owner.conns[this.peerId]; };
+    function raceLoadPeerLib(cb){
+      if (RR_FAKE){ cb(null, FakePeer); return; }
+      if (window.Peer){ cb(null, window.Peer); return; }
+      var sc = document.createElement("script"); sc.src = PEERJS_URL; sc.async = true;
+      sc.onload = function(){ cb(window.Peer ? null : "peer library missing", window.Peer); };
+      sc.onerror = function(){ cb("Couldn't load the peer-to-peer library (offline, or blocked here)."); };
+      document.head.appendChild(sc);
+    }
+    function raceNetNew(role){
+      var N = { role:role, code:null, peer:null, peerId:null, conns:{}, hostConn:null, pollT:null, started:false, closed:false, sendT:0, slotByPeer:{}, members:[], lastRoom:null, soloT:0, myPeerLast:0 };
+      N.send = function(msg){
+        if (N.closed) return;
+        if (msg.t === "feed"){ if (N.role === "host") N.bcast(msg); else if (N.hostConn && N.hostConn.open !== false) N.hostConn.send(msg); return; }
+        if (msg.t === "end" && N.role === "host"){ N.bcast(msg); }
+      };
+      N.bcast = function(msg, except){ Object.keys(N.conns).forEach(function(k){ if (k === except) return; try { N.conns[k].send(msg); } catch(e){} }); };
+      N.tick = function(dt){ raceNetPump(N, dt); };
+      N.close = function(){
+        N.closed = true; clearInterval(N.pollT);
+        if (cloudActive() && N.code) cloudCall("rr_leave", { p_token:cloud.token, p_code:N.code }, function(){});
+        try { Object.keys(N.conns).forEach(function(k){ try { N.conns[k].close(); } catch(e){} }); if (N.hostConn) N.hostConn.close(); } catch(e){}
+        try { if (N.peer) N.peer.destroy(); } catch(e){}
+      };
+      return N;
+    }
+    function raceNetOnline(){ return cloudOn() && cloudActive(); }
+    function raceNetNeedProfile(){ var M = RACE.menu; M.err = cloudOn() ? "Online races need an online profile: ☰ → account → ☁ SAVE MY PROFILE ONLINE (or sign in), then try again." : "Online play isn't available here."; M.busy = false; M.searching = 0; raceRefreshMenu(); }
+    function raceNetOpenPeer(N, done){
+      raceLoadPeerLib(function(err, Peer){
+        if (err){ done(err); return; }
+        try {
+          var pr = N.peer = new Peer(), fin = false;
+          pr.on("open", function(id){ if (fin) return; fin = true; N.peerId = id; done(null); });
+          pr.on("error", function(e){ if (!fin){ fin = true; done("Peer-to-peer connection failed (" + ((e && e.type) || "error") + ")."); } else raceFeed("Network hiccup: " + ((e && e.type) || "peer error"), "#ffb4b4", true); });
+          pr.on("connection", function(conn){ raceNetAccept(N, conn); });
+          setTimeout(function(){ if (!fin){ fin = true; done("Timed out reaching the peer-to-peer server."); } }, 12000);
+        } catch(e){ done("Couldn't start peer-to-peer: " + e.message); }
+      });
+    }
+    function raceNetFail(msg){ var M = RACE.menu; raceNetClose(); M.view = "main"; M.lobby = null; M.err = msg; M.busy = false; M.searching = 0; raceRefreshMenu(); }
+    /* ---- host side ---- */
+    function raceNetAccept(N, conn){
+      conn.on("open", function(){ conn.isOpen = true; });
+      conn.on("data", function(d){ raceNetHostGot(N, conn, d); });
+      conn.on("close", function(){ var k = conn.peer || conn.peerId; delete N.conns[k]; var p = RACE.players.filter(function(x){ return x.peer === k; })[0]; if (p && RACE.on){ p.dnf = true; raceFeed(p.label + " " + p.name + " left the race (DNF)", p.color, true); } });
+    }
+    function raceNetHostGot(N, conn, d){
+      if (!d) return;
+      var key = conn.peer || conn.peerId;
+      if (d.t === "hello"){ N.conns[key] = conn; return; }
+      if (d.t === "me"){
+        var p = RACE.players.filter(function(x){ return x.peer === key; })[0]; if (!p) return;
+        var s = d.s || {};
+        p.tx = s.x; p.ty = s.y; p.face = s.f; p.moving = !!s.m; p.walk = s.w || 0; p.down = s.d ? 1 : 0; p.protect = s.pr || 0; p.bank = +s.b || 0; p.pocket = +s.pk || 0;
+        if (p.x == null || isNaN(p.x)) { p.x = p.tx; p.y = p.ty; }
+        raceCheckWin();
+      } else if (d.t === "feed"){ raceFeed(d.text, d.color, true); N.bcast(d, key); }
+    }
+    function raceNetHostStart(){
+      var N = RACE.net; if (!N || N.role !== "host" || N.started || RACE.on) return;
+      N.started = true; var M = RACE.menu;
+      var members = (M.lobby && M.lobby.members) || [];
+      cloudCall("rr_start", { p_token:cloud.token, p_code:N.code, p_mode:RACE.mode, p_fill:RACE.fill }, function(){});
+      var remote = members.map(function(m){ return { name:m.name, look:m.look, slot:m.slot, peer:m.peer }; });
+      var cfg = { t:"start", mode:RACE.mode, fill:RACE.fill, bots:[], players:[{ slot:0, name:S.username ? String(S.username).toUpperCase().slice(0, 10) : "HOST", look:S.lookIdx | 0, peer:N.peerId }].concat(remote) };
+      raceBegin(remote, { fill:RACE.fill, mySlot:0 });
+      RACE.players.forEach(function(p){ if (p.kind === "bot") cfg.bots.push({ slot:p.id, name:p.name }); });
+      N.bcast(cfg);
+    }
+    /* ---- guest side ---- */
+    function raceNetConnectHost(N, hostPeer){
+      var conn = N.hostConn = N.peer.connect(hostPeer, { reliable:true });
+      conn.on("open", function(){ conn.isOpen = true; conn.send({ t:"hello", name:S.username || "PLAYER" }); });
+      conn.on("data", function(d){ raceNetGuestGot(N, d); });
+      conn.on("close", function(){ if (N.closed) return; if (RACE.on && RACE.phase === "run"){ raceFeed("HOST DISCONNECTED — ending on the current standings", "#ff8b8b", true); var E = raceEntries(), top = E[0].bank; raceEnd(E.filter(function(e){ return e.bank === top; }), "host-left"); } else if (!RACE.on){ raceNetFail("The host left the lobby."); } });
+    }
+    function raceNetGuestGot(N, d){
+      if (!d) return;
+      if (d.t === "start" && !RACE.on){
+        RACE.mode = d.mode === "teams" ? "teams" : "ffa"; RACE.fill = d.fill !== false; N.started = true;
+        var mine = d.players.filter(function(p){ return p.peer === N.peerId; })[0], mySlot = mine ? mine.slot : 1;
+        var others = d.players.filter(function(p){ return p.peer !== N.peerId; }).map(function(p){ return { name:p.name, look:p.look, slot:p.slot, peer:p.peer }; });
+        raceBegin(others, { fill:RACE.fill, mySlot:mySlot, guest:true });
+        (d.bots || []).forEach(function(b){ var bp = raceP(b.slot); if (bp && bp.kind === "bot") bp.name = b.name; });
+      } else if (d.t === "sync" && RACE.on){
+        if (typeof d.left === "number") RACE.left = d.left;
+        (d.ps || []).forEach(function(s){
+          var p = RACE.players.filter(function(x){ return x.id === s.id; })[0]; if (!p || p === RACE.me) return;
+          p.tx = s.x; p.ty = s.y; p.face = s.f; p.moving = !!s.m; p.walk = s.w || 0; p.down = s.d ? 1 : 0; p.protect = s.pr || 0; p.bank = +s.b || 0; p.pocket = +s.pk || 0;
+          if (p.x == null || isNaN(p.x)){ p.x = p.tx; p.y = p.ty; }
+        });
+      } else if (d.t === "feed"){ raceFeed(d.text, d.color, true); }
+      else if (d.t === "end" && RACE.on && RACE.phase !== "over"){
+        var R = d.result, myName = RACE.me ? RACE.me.label + " " + RACE.me.name : "", meE = (R.entries || []).filter(function(e){ return e.members.indexOf(myName) >= 0; })[0];
+        R.won = !!meE && R.winners.indexOf(meE.label) >= 0; R.myBank = RACE.me ? RACE.me.bank : 0; R.shared = R.winners.length > 1;
+        RACE.result = R; RACE.phase = "over"; sndGood(); RACE.menu.view = "results"; closeMenu(); openHud("race");
+      }
+    }
+    /* ---- per-frame pump: send my state ~10 Hz, host sends the sync packet ---- */
+    function raceNetPump(N, dt){
+      if (N.closed || !RACE.on) return;
+      // glide remote avatars toward their last reported position
+      RACE.players.forEach(function(p){ if ((p.kind === "remote" || (p.kind === "bot" && N.role === "guest")) && p.tx != null){ var k = Math.min(1, dt * 12); p.x += (p.tx - p.x) * k; p.y += (p.ty - p.y) * k; } });
+      N.sendT -= dt; if (N.sendT > 0) return; N.sendT = 0.1;
+      var me = RACE.me; if (!me) return;
+      var mine = { x:Math.round(player.x), y:Math.round(player.y), f:player.face || 1, m:player.moving ? 1 : 0, w:+(player.walk || 0).toFixed(2), d:me.down ? 1 : 0, pr:+me.protect.toFixed(1), b:Math.round(me.bank), pk:Math.round(S.cash) };
+      if (N.role === "guest"){ if (N.hostConn && N.hostConn.isOpen !== false) { try { N.hostConn.send({ t:"me", s:mine }); } catch(e){} } return; }
+      var ps = [];
+      RACE.players.forEach(function(p){
+        if (p === me) ps.push({ id:p.id, x:mine.x, y:mine.y, f:mine.f, m:mine.m, w:mine.w, d:mine.d, pr:mine.pr, b:mine.b, pk:mine.pk });
+        else ps.push({ id:p.id, x:Math.round(p.x), y:Math.round(p.y), f:p.face || 1, m:p.moving ? 1 : 0, w:+(p.walk || 0).toFixed(2), d:p.down ? 1 : 0, pr:+(p.protect || 0).toFixed(1), b:Math.round(p.bank), pk:Math.round(p.pocket || 0) });
+      });
+      N.bcast({ t:"sync", left:+RACE.left.toFixed(2), ps:ps });
+    }
+    /* ---- lobby polling ---- */
+    function raceNetPoll(N){
+      if (N.closed || N.started || RACE.on) return;
+      cloudCall("rr_room", { p_token:cloud.token, p_code:N.code }, function(err, room){
+        if (N.closed || N.started || RACE.on) return;
+        var M = RACE.menu;
+        if (err){ M.err = err.netErr ? "Connection hiccup — retrying…" : String(err.message || "error"); raceRefreshMenu(); return; }
+        if (!room || room.error || room.status === "closed"){ raceNetFail((room && room.error) ? room.error : "That room closed."); return; }
+        M.err = ""; N.lastRoom = room;
+        var mem = (room.members || []).filter(function(m){ return m.peer !== N.peerId; }).map(function(m){ return { name:String(m.name).toUpperCase(), slot:m.slot, peer:m.peer, look:m.look, host:!!m.host }; });
+        if (M.lobby){ M.lobby.members = mem; M.lobby.code = N.code; M.lobby.guest = N.role === "guest"; }
+        if (N.role === "guest"){
+          if (!N.hostConn && room.host_peer && room.host_peer !== N.peerId) raceNetConnectHost(N, room.host_peer);
+          if (M.lobby) M.lobby.status = room.status === "started" ? "Race starting…" : (mem.length + 1) + " in the room — waiting for the host to start.";
+        } else {
+          var total = mem.length + 1;
+          RACE.mode = room.mode === "teams" ? "teams" : "ffa";
+          if (M.lobby){
+            if (N.auto){   // random-matchmaking room: auto-start rules
+              var wait = room.second_age;
+              if (total >= 4) M.lobby.status = "Room full — starting!";
+              else if (total >= 2) M.lobby.status = total + " racers — starting in " + Math.max(0, 30 - (wait || 0)) + "s (waiting for more)…";
+              else M.lobby.status = "Searching… nobody else yet (bots join in " + Math.max(0, 20 - Math.round(N.soloT)) + "s).";
+            } else M.lobby.status = total + " in the room — share the code, then press START.";
+          }
+          if (N.auto){
+            N.soloT += 1.5;
+            var go = total >= 4 || (total >= 2 && (room.second_age || 0) >= 30) || (total === 1 && N.soloT >= 20);
+            if (go){ RACE.fill = true; raceNetHostStart(); return; }
+          }
+          if (total >= 4 && !N.auto) { /* host still presses START */ }
+        }
+        raceRefreshMenu();
+      });
+    }
+    function raceNetBeginLobby(N, room, auto){
+      var M = RACE.menu; N.code = room.code; N.auto = !!auto; M.view = "lobby"; M.busy = false; M.searching = 0; M.err = "";
+      M.lobby = { code:room.code, members:[], status:"Connecting…", guest:N.role === "guest" };
+      RACE.net = N;
+      N.pollT = setInterval(function(){ raceNetPoll(N); }, 1500); raceNetPoll(N);
+      raceRefreshMenu();
+    }
+    function raceHost(){
+      var M = RACE.menu; M.err = "";
+      if (!raceNetOnline()){ raceNetNeedProfile(); return; }
+      M.busy = true; raceRefreshMenu();
+      var N = raceNetNew("host");
+      raceNetOpenPeer(N, function(err){
+        if (err){ raceNetFail(err); return; }
+        cloudCall("rr_host", { p_token:cloud.token, p_peer:N.peerId, p_mode:RACE.mode, p_public:false, p_fill:RACE.fill }, function(e, room){
+          if (e || !room || room.error){ raceNetFail(e ? (e.netErr ? "Can't reach the server." : e.message) : (room && room.error) || "Couldn't make a room."); return; }
+          raceNetBeginLobby(N, room, false);
+        });
+      });
+    }
+    function raceJoin(code){
+      var M = RACE.menu; M.err = "";
+      if (!/^[A-Z]{4}$/.test(code || "")){ M.err = "Room codes are 4 letters."; raceRefreshMenu(); return; }
+      if (!raceNetOnline()){ raceNetNeedProfile(); return; }
+      M.busy = true; raceRefreshMenu();
+      var N = raceNetNew("guest");
+      raceNetOpenPeer(N, function(err){
+        if (err){ raceNetFail(err); return; }
+        cloudCall("rr_join", { p_token:cloud.token, p_code:code, p_peer:N.peerId }, function(e, room){
+          if (e || !room || room.error){ var m = e ? (e.netErr ? "Can't reach the server." : e.message) : (room && room.error) || "Couldn't join."; raceNetClose(); M.view = "join"; M.busy = false; M.err = m; raceRefreshMenu(); return; }
+          RACE.mode = room.mode === "teams" ? "teams" : "ffa"; RACE.fill = room.fill !== false;
+          raceNetBeginLobby(N, room, false);
+        });
+      });
+    }
+    function raceNetFind(){
+      var M = RACE.menu; M.err = "";
+      if (!raceNetOnline()){
+        // no online profile: don't dead-end — race bots, and say why real players can't be matched
+        M.searching = 1; raceRefreshMenu();
+        setTimeout(function(){ if (RACE.on) return; M.searching = 0; M.view = "lobby"; M.lobby = { members:[], status:"Put your profile online (☰ → account → ☁) to be matched with real players. Bots fill the slots for now." }; RACE.fill = true; raceRefreshMenu(); }, 1500);
+        return;
+      }
+      M.searching = 1; raceRefreshMenu();
+      var N = raceNetNew("host");   // role is corrected below once we know if we created the room or joined one
+      raceNetOpenPeer(N, function(err){
+        if (err){ raceNetFail(err); return; }
+        cloudCall("rr_find", { p_token:cloud.token, p_peer:N.peerId, p_mode:RACE.mode }, function(e, room){
+          if (e || !room || room.error){ raceNetFail(e ? (e.netErr ? "Can't reach the server." : e.message) : (room && room.error) || "Matchmaking failed."); return; }
+          N.role = room.host_peer === N.peerId ? "host" : "guest";
+          RACE.mode = room.mode === "teams" ? "teams" : "ffa"; if (N.role === "guest") RACE.fill = room.fill !== false;
+          raceNetBeginLobby(N, room, true);
+        });
+      });
+    }
+    /* a ring + tag on YOU so everyone can tell who is who */
+    function drawRaceMe(ents){
+      if (!RACE.on || !RACE.me) return;
+      var me = RACE.me;
+      ents.push({ x:player.x, y:player.y + 1, fn:function(){
+        ctx.save(); ctx.strokeStyle = me.color; ctx.lineWidth = 4; ctx.beginPath(); ctx.ellipse(player.x, player.y + 22, 30, 11, 0, 0, Math.PI * 2); ctx.stroke(); ctx.restore();
+        ctx.font = "900 12px Nunito, sans-serif"; ctx.textAlign = "center"; ctx.lineWidth = 4; ctx.strokeStyle = "rgba(0,0,0,.85)"; ctx.strokeText(me.label + " (YOU)", player.x, player.y - 76); ctx.fillStyle = me.color; ctx.fillText(me.label + " (YOU)", player.x, player.y - 76);
+      } });
+    }
+    /* arrest / death inside a race go to the race handlers (respawn at your own trap); everything else is the normal game */
+    var _raceSendToHospital = sendToHospital;
+    sendToHospital = function(cause, took){ if (RACE.on){ raceDown("ambulance", cause === "murked" ? "murked" : cause === "shot" ? "shot" : "beaten"); return; } return _raceSendToHospital(cause, took); };
+    var _raceStartPoliceEscort = startPoliceEscort;
+    startPoliceEscort = function(stars){ if (RACE.on){ raceDown("police", "busted"); return; } return _raceStartPoliceEscort(stars); };
 
     /* ---------------- dark-mode contrast guard ----------------
        Some rows are painted with a light inline background (can't afford, owned, warnings…). In dark mode their text inherits the light ink color — light on light.
