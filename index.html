@@ -3892,7 +3892,7 @@
 
     /* ---------------- economy helpers ---------------- */
     function earn(n, why){
-      if (RACE.on && RACE.phase === "run"){ var cu = 1; if (RACE_CFG.catchUp && RACE.left < RACE_CFG.catchUpSecs && /^(Lick|BULK lick)/.test(String(why))){ var en = raceEntries(); if (en.length > 1 && en[en.length - 1].players.indexOf(RACE.me) >= 0) cu = RACE_CFG.catchUpMul; } n = Math.round(n * RACE_CFG.payMul * cu); }
+      if (RACE.on && RACE.phase === "run"){ var cu = 1; if (RACE_CFG.catchUp && RACE.left < RACE_CFG.catchUpSecs && /^(Lick|BULK lick)/.test(String(why))){ var en = raceEntries(); if (en.length > 1 && en[en.length - 1].players.indexOf(RACE.me) >= 0) cu = RACE_CFG.catchUpMul; } n = Math.min(RACE_CFG.maxPayout, Math.round(n * RACE_CFG.payMul * cu)); }
       // pockets hold unlimited cash — every dollar lands on your person.
       // What rides with you can be taken; the Stash is the only safe store.
       S.cash += n; S.totalEarned += n; addIncome(incomeCat(why), n);
@@ -3984,8 +3984,9 @@
     function updateHUD(){
       cashVal.textContent = money(S.cash);
       cashVal.classList.toggle("long", cashVal.textContent.length > 8);
-      var bv = document.getElementById("bankVal"); if (bv) bv.textContent = money(S.bank || 0);
-      var bs = document.getElementById("bankState"); if (bs) bs.textContent = money(S.bank || 0);
+      var shownBank = (RACE.on && RACE.me) ? RACE.me.bank : (S.bank || 0);   // in a race the STASH chip shows what you've BANKED at your trap house
+      var bv = document.getElementById("bankVal"); if (bv) bv.textContent = money(shownBank);
+      var bs = document.getElementById("bankState"); if (bs) bs.textContent = money(shownBank);
       cloutVal.textContent = Math.round(S.clout);
       cloutBar.style.width = S.clout + "%";
       heatVal.textContent = Math.round(S.heat);
@@ -15257,7 +15258,9 @@
       target:1000000,          // FFA: first to bank this wins
       teamTarget:1500000,      // 2v2: a team's COMBINED bank that wins
       seconds:600,             // race length (10:00)
-      payMul:6,               // every earn() inside the race (licks, buyer cars, NPC deals) is multiplied by this
+      payMul:6,                // every earn() inside the race (licks, buyer cars, NPC deals) is multiplied by this
+      maxPayout:90000,         // no single deal can pay more than this (one lucky bulk lick can't decide a race)
+      payMulUnused:0,               // every earn() inside the race (licks, buyer cars, NPC deals) is multiplied by this
       licks:11,                // lick count on the block (base game: 7) — "several active at once"
       lickSpeed:2.4,           // lick offer timers run this much faster (they are back in ~10–20 s)
       buyerRespawn:[15, 30], buyerFirst:[6, 12],   // buyer cars (base game: 55–100 s)
@@ -15344,6 +15347,7 @@
       raceFeed(me.label + " STASHED " + money(amt) + " → bank " + money(me.bank), me.color);
       toast("STASHED " + money(amt) + " — banked " + money(me.bank) + ". Wanted level cleared.", true);
       raceNetSend({ t:"bank", bank:me.bank });
+      updateHUD();
       raceCheckWin();
     }
     /* ---- arrest / death: unstashed cash gone, respawn in front of YOUR OWN trap house ---- */
@@ -15405,9 +15409,10 @@
       closeMenu();
       var me = RACE.me;
       S.district = "winton"; ensurePrices("winton");
-      S.cash = 0; S.bank = 0; S.heat = 0; S.clout = Math.max(40, S.clout || 0); S.tierIdx = Math.max(S.tierIdx || 0, 1); S.gunTier = Math.max(S.gunTier | 0, 2); S.car = null; S.bagTier = Math.max(S.bagTier | 0, 4); S.driving = false; S.crew = { enforcers:0 }; S.traps = {}; S.held = {};
+      S.cash = 0; S.bank = 0; S.heat = 0; S.clout = 40; S.tierIdx = 1; S.gunTier = 2;   // everyone races on the SAME footing: a Kingpin's truckload bulk buyers and plug perks stay out of the T S.car = null; S.bagTier = Math.max(S.bagTier | 0, 4); S.driving = false; S.crew = { enforcers:0 }; S.traps = {}; S.held = {};
       S.contract = null; S.mission = null; S.quest = "none"; S.spotJob = null; S.spotBoard = []; S.inv = {}; S.invFrom = {}; S.jackboy = null; S.threatCd = 20; S.minutes = 14 * 60; S.ghostTime = 0; S.power = null; S.escortT = 0; S.holedUp = false;
       driveby = null; try { cruiserStand(); } catch(e){} buyerCar = null; buyerTimer = rand(RACE_CFG.buyerFirst[0], RACE_CFG.buyerFirst[1]); hit = null; tow = null; plugRun = null; plugVan = null; npcFight = null; oppAmb = null;
+      RACE.savedEnf = enforcers.splice(0, enforcers.length);   // your real crew stays on the bench, untouched, until you leave
       applyHoodLayout(); spawnLicks();
       var sp = raceSpawnAt(me.id); player.x = sp.x; player.y = sp.y; player.vx = 0; player.vy = 0; camPos.x = null;
       raceLoad();
@@ -15424,6 +15429,7 @@
       if (snap){
         S = snap; S.jackboy = null; S.ship = null; S.beamTrvp = null; S.cloutFx = []; S.driving = false; S.holedUp = false;
         driveby = null; try { cruiserStand(); } catch(e){} buyerCar = null; hit = null; tow = null; plugRun = null; plugVan = null; npcFight = null; oppAmb = null; rescue = null;
+        enforcers.length = 0; (RACE.savedEnf || []).forEach(function(e){ enforcers.push(e); }); RACE.savedEnf = null;
         applyHoodLayout(); spawnLicks(); placeEnforcers();
         if (RACE.prePos){ player.x = RACE.prePos.x; player.y = RACE.prePos.y; player.vx = 0; player.vy = 0; camPos.x = null; }
         if (res){   // multiplayer stats ride the REAL save
