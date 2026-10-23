@@ -15259,6 +15259,7 @@
       teamTarget:1500000,      // 2v2: a team's COMBINED bank that wins
       seconds:600,             // race length (10:00)
       payMul:6,                // every earn() inside the race (licks, buyer cars, NPC deals) is multiplied by this
+      stashBonusPct:1,         // share of what YOU banked in the race that is paid into your REAL Stash when you leave (1 = all of it; 0 = none)
       maxPayout:90000,         // no single deal can pay more than this (one lucky bulk lick can't decide a race)
       payMulUnused:0,               // every earn() inside the race (licks, buyer cars, NPC deals) is multiplied by this
       licks:11,                // lick count on the block (base game: 7) — "several active at once"
@@ -15423,7 +15424,7 @@
     }
     function raceExit(){
       if (!RACE.on) return;
-      var res = RACE.result;
+      var res = RACE.result, bonusAmt = RACE.me ? Math.round(Math.max(0, RACE.me.bank) * RACE_CFG.stashBonusPct) : 0;   // leaving early (DNF) still pays what you had banked
       RACE.on = false; RACE.phase = "off"; document.body.classList.remove("racing");
       var snap = RACE.snap; RACE.snap = null;
       if (snap){
@@ -15437,6 +15438,11 @@
           if (!S.stats) S.stats = {}; S.stats.mpbest = Math.max(S.stats.mpbest | 0, Math.round(res.myBank));
           toast(res.won ? "🏁 YOU WON THE RACE" + (res.shared ? " (shared)" : "") + "! Back to your own game — it's exactly as you left it." : "Race over — back to your own game, exactly as you left it.", true);
         }
+      }
+      if (snap && bonusAmt > 0){
+        S.bank = (S.bank || 0) + bonusAmt; addIncome("other", bonusAmt);
+        log("Rack Race bonus: +" + money(bonusAmt) + " paid into your real Stash.", "good");
+        toast("🏁 +" + money(bonusAmt) + " from the T went into your real STASH.", true);
       }
       suppressSave = false; RACE.players = []; RACE.me = null; RACE.result = null;
       raceNetClose();
@@ -15639,7 +15645,7 @@
         h += hudHead(R.won ? "🏁 YOU WON" + (R.shared ? " — SHARED WIN" : "") + "!" : "🏁 RACE OVER");
         h += '<p class="drumor">' + (R.why === "target" ? "Someone banked " + money(raceTarget()) + "." : R.why === "host-left" ? "The host disconnected — final standings." : "Time's up — highest bank wins.") + (R.winners.length ? " Winner" + (R.winners.length > 1 ? "s" : "") + ": <b>" + esc(R.winners.join(" & ")) + "</b>" + (R.shared ? " (tie — shared win)" : "") : " Nobody banked anything — no winner.") + "</p>";
         R.entries.forEach(function(e){ h += hudRow("#" + e.rank + " " + e.label + (e.dnf ? " · DNF" : ""), money(e.bank), e.members.join(" · "), ""); });
-        h += hudRow("YOUR RACE", money(R.myBank), "Banked " + money(R.myBank) + " in " + raceFmtTime(R.seconds) + ". Win/race stats are saved to your real profile.", hudBtn("DONE — BACK TO MY GAME", "buy", function(){ raceExit(); }, false));
+        h += hudRow("YOUR RACE", money(R.myBank), "Banked " + money(R.myBank) + " in " + raceFmtTime(R.seconds) + ". " + (RACE_CFG.stashBonusPct > 0 ? "<b>" + money(Math.round(R.myBank * RACE_CFG.stashBonusPct)) + " is paid into your REAL Stash</b> as a bonus for racing, and " : "") + "win/race stats are saved to your real profile.", hudBtn("DONE — BACK TO MY GAME", "buy", function(){ raceExit(); }, false));
         return h;
       }
       if (M.view === "lobby" && M.lobby){
